@@ -1,0 +1,22 @@
+{
+  "version": "risk-text-logreg-20261113-bootstrap",
+  "examples": 448,
+  "scam_examples": 28,
+  "expert_labels": 0,
+  "seed_examples": 48,
+  "weak_real_examples": 400,
+  "excluded_incomplete_listings": 115,
+  "text_flag_weights": {
+    "deposit_before_viewing": 2.95,
+    "no_viewing": 4.3,
+    "off_platform_contact": 2.2,
+    "payment_service": 4.13,
+    "urgency": 0.49
+  },
+  "cross_validation_text_model": {
+    "roc_auc": 1.0,
+    "precision_scam": 1.0,
+    "recall_scam": 0.929
+  },
+  "note": "Metrics on bootstrap data are optimistic; replace with expert-rated listings."
+}
