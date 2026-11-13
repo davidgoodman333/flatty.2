@@ -3,6 +3,9 @@ import {
   ApiError, ApiUnavailable, checkLink, checkListingOnline, demoApartments, emptyFilters, fetchSources, generateText, matchListings,
   PAGE_SIZE, type Apartment, type Filters, type ListingStatus, type Profile, type SortKey, type SourceInfo,
 } from "./api";
+import Icon from "./Icon";
+import { APARTMENT_TYPES, AREAS, BUDGET_MAX, BUDGET_MIN, COUNTRIES, MAIN_LANGUAGES, OTHER_LANGUAGES, PRIORITIES } from "./options";
+import PreferencesDrawer from "./PreferencesDrawer";
 
 const SORT_OPTIONS: [SortKey, string][] = [
   ["match", "Best match"], ["price_asc", "Price: low to high"], ["price_desc", "Price: high to low"],
@@ -36,31 +39,6 @@ const countActiveFilters = (filters: Filters) =>
   + filters.types.length + filters.features.length + (filters.rental !== "any" ? 1 : 0) + (filters.withPhotos ? 1 : 0);
 
 type Screen = "welcome" | "about" | "onboarding" | "browse" | "result";
-type IconName = "arrow" | "back" | "check" | "chevron" | "home" | "link" | "mail" | "map" | "search" | "shop" | "train" | "work";
-
-function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
-  const paths: Record<IconName, React.ReactNode> = {
-    arrow: <path d="M5 12h14m-5-5 5 5-5 5" />,
-    back: <path d="m15 18-6-6 6-6" />,
-    check: <path d="m5 12 4 4L19 6" />,
-    chevron: <path d="m8 10 4 4 4-4" />,
-    home: <path d="m3 11 9-8 9 8M5.5 9.5V21h13V9.5M9 21v-7h6v7" />,
-    link: <path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2" />,
-    mail: <><rect x="3" y="5" width="18" height="14" rx="1" /><path d="m4 7 8 6 8-6" /></>,
-    map: <><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Z" /><path d="M9 3v15M15 6v15" /></>,
-    search: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></>,
-    shop: <><path d="M4 10v10h16V10M3 10l2-6h14l2 6" /><path d="M3 10a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0M9 20v-5h6v5" /></>,
-    train: <><rect x="5" y="3" width="14" height="15" rx="3" /><path d="M8 21l2-3M16 18l2 3M8 8h8M9 14h.01M15 14h.01" /></>,
-    work: <><rect x="3" y="7" width="18" height="13" rx="1" /><path d="M9 7V4h6v3M3 12h18M10 12v2h4v-2" /></>,
-  };
-
-  return (
-    <svg aria-hidden="true" fill="none" height={size} viewBox="0 0 24 24" width={size}>
-      <g stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7">{paths[name]}</g>
-    </svg>
-  );
-}
-
 const matchHeadline = (match: number) => {
   if (match >= 80) return "Strong match.";
   if (match >= 60) return "Good match.";
@@ -119,6 +97,8 @@ export default function App() {
   const [photoIndex, setPhotoIndex] = useState(0);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [showPreferences, setShowPreferences] = useState(false);
+  const [notice, setNotice] = useState("");
   const [listingStatus, setListingStatus] = useState<ListingStatus & { checking?: boolean }>({ available: null });
   const listingRequest = useRef(0);
   const openListingId = useRef("");
@@ -137,6 +117,30 @@ export default function App() {
     languages, budget, areas, destination, priorities, country, hasGuarantor, hasViewingPerson,
     hasSwissNumber, hasSwissBank, hasResidencePermit, apartmentTypes,
   };
+
+  type YesNo = "yes" | "no" | "";
+  const applyPreferences = (next: Profile) => {
+    setLanguages(next.languages);
+    setBudget(next.budget);
+    setAreas(next.areas);
+    setDestination(next.destination);
+    setPriorities(next.priorities);
+    setCountry(next.country);
+    setHasGuarantor(next.hasGuarantor as YesNo);
+    setHasViewingPerson(next.hasViewingPerson as YesNo);
+    setHasSwissNumber(next.hasSwissNumber as YesNo);
+    setHasSwissBank(next.hasSwissBank as YesNo);
+    setHasResidencePermit(next.hasResidencePermit as YesNo);
+    setApartmentTypes(next.apartmentTypes);
+    setShowPreferences(false);
+    setNotice(screen === "result" ? "Preferences saved. Your results update when you go back to them." : "Preferences saved. Your results are updating.");
+  };
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   const toggle = (value: string, values: string[], setter: (next: string[]) => void) => {
     setter(values.includes(value) ? values.filter((item) => item !== value) : [...values, value]);
@@ -304,7 +308,7 @@ export default function App() {
           </button>
           {(screen === "browse" || screen === "result") && <span className="header-pref">{preferenceText}</span>}
           {(screen === "browse" || screen === "result") && (
-            <button className="edit-button" onClick={() => { setScreen("onboarding"); setStep(1); }} type="button">
+            <button aria-haspopup="dialog" className="edit-button" onClick={() => setShowPreferences(true)} type="button">
               Edit preferences
             </button>
           )}
@@ -460,7 +464,7 @@ export default function App() {
               <div className="question">
                 <label>Which languages do you speak?</label>
                 <div className="chips">
-                  {["English", "German", "French", "Italian"].map((language) => (
+                  {MAIN_LANGUAGES.map((language) => (
                     <button className={languages.includes(language) ? "chip active" : "chip"} key={language} onClick={() => toggle(language, languages, setLanguages)} type="button">
                       {languages.includes(language) && <Icon name="check" size={14} />}{language}
                     </button>
@@ -483,12 +487,12 @@ export default function App() {
                     }}
                   >
                     <option value="" disabled>Choose another language</option>
-                    {["Arabic", "Dutch", "Hindi", "Japanese", "Korean", "Mandarin", "Polish", "Portuguese", "Russian", "Spanish", "Turkish", "Ukrainian"].map((language) => <option key={language}>{language}</option>)}
+                    {OTHER_LANGUAGES.map((language) => <option key={language}>{language}</option>)}
                   </select>
                 )}
-                {languages.some((language) => !["English", "German", "French", "Italian"].includes(language)) && (
+                {languages.some((language) => !MAIN_LANGUAGES.includes(language)) && (
                   <div className="selected-extras">
-                    {languages.filter((language) => !["English", "German", "French", "Italian"].includes(language)).map((language) => (
+                    {languages.filter((language) => !MAIN_LANGUAGES.includes(language)).map((language) => (
                       <button key={language} onClick={() => setLanguages(languages.filter((item) => item !== language))} type="button">{language} ×</button>
                     ))}
                   </div>
@@ -496,7 +500,7 @@ export default function App() {
               </div>
               <div className="question">
                 <div className="label-row"><label>Maximum monthly rent</label><strong>CHF {budget.toLocaleString("de-CH")}</strong></div>
-                <input className="range-input" min="400" max="3500" step="50" type="range" value={budget} onChange={(event) => setBudget(Number(event.target.value))} />
+                <input className="range-input" min={BUDGET_MIN} max={BUDGET_MAX} step="50" type="range" value={budget} onChange={(event) => setBudget(Number(event.target.value))} />
                 <div className="range-labels"><span>CHF 400</span><span>CHF 3,500</span></div>
               </div>
             </section>
@@ -509,7 +513,7 @@ export default function App() {
               <div className="question">
                 <label>Preferred areas</label>
                 <div className="chips">
-                  {["Länggasse", "Breitenrain", "Mattenhof", "Old Town", "Anywhere"].map((area) => (
+                  {AREAS.map((area) => (
                     <button className={areas.includes(area) ? "chip active" : "chip"} key={area} onClick={() => toggle(area, areas, setAreas)} type="button">
                       {areas.includes(area) && <Icon name="check" size={14} />}{area}
                     </button>
@@ -545,16 +549,9 @@ export default function App() {
               <h1>What matters nearby?</h1>
               <p>Select your everyday essentials.</p>
               <div className="priority-grid">
-                {[
-                  ["Public transport", "train", "Within 10 min"],
-                  ["Grocery stores", "shop", "Within 10 min"],
-                  ["Short commute", "work", `To ${destination || "work"}`],
-                  ["Quiet area", "home", "Low street noise"],
-                  ["Green space", "map", "Park within 10 min"],
-                  ["Cafés & study", "shop", "Places to work nearby"],
-                ].map(([name, icon, note]) => (
+                {PRIORITIES.map(([name, icon, defaultNote]) => [name, icon, name === "Short commute" ? `To ${destination || "work"}` : defaultNote] as const).map(([name, icon, note]) => (
                   <button className={priorities.includes(name) ? "priority active" : "priority"} key={name} onClick={() => toggle(name, priorities, setPriorities)} type="button">
-                    <span className="priority-icon"><Icon name={icon as IconName} size={21} /></span>
+                    <span className="priority-icon"><Icon name={icon} size={21} /></span>
                     <span><strong>{name}</strong><small>{note}</small></span>
                     <span className="pixel-check">{priorities.includes(name) && <Icon name="check" size={13} />}</span>
                   </button>
@@ -570,7 +567,7 @@ export default function App() {
               <div className="question">
                 <label htmlFor="country">Country</label>
                 <select className="option-select country-select" id="country" value={country} onChange={(event) => setCountry(event.target.value)}>
-                  {["Switzerland", "Germany", "France", "Italy", "Spain", "Portugal", "United Kingdom", "United States", "India", "China", "Ukraine", "Turkey", "Other"].map((item) => <option key={item}>{item}</option>)}
+                  {COUNTRIES.map((item) => <option key={item}>{item}</option>)}
                 </select>
               </div>
               <div className="question support-question">
@@ -629,13 +626,7 @@ export default function App() {
               <h1>What are you looking for?</h1>
               <p>Choose your preferred apartment type.</p>
               <div className="apartment-types">
-                {[
-                  ["Shared apartment", "A room with flatmates"],
-                  ["Studio", "A compact place for one"],
-                  ["Proper flat", "Your own full apartment"],
-                  ["2-person flat", "Space for two people"],
-                  ["3-person flat", "Space for three people"],
-                ].map(([type, note]) => (
+                {APARTMENT_TYPES.map(([type, note]) => (
                   <button
                     className={apartmentTypes.includes(type) ? "type-card active" : "type-card"}
                     key={type}
@@ -1009,6 +1000,15 @@ export default function App() {
           )}
         </main>
       )}
+      {showPreferences && (
+        <PreferencesDrawer
+          initial={profile}
+          onApply={applyPreferences}
+          onClose={() => setShowPreferences(false)}
+          onRestartSetup={() => { setShowPreferences(false); setStep(1); setScreen("onboarding"); }}
+        />
+      )}
+      {notice && !showPreferences && <div className="toast" role="status">{notice}</div>}
     </div>
   );
 }
