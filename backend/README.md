@@ -5,8 +5,6 @@ Local back-end for the Flatty prototype. It:
 1. collects Bern rental listings from **Flatfox**, the **Uni Bern Welcome Center housing board** and **studentlodge.ch**. Other sites are disabled because their terms forbid it or they block bots; see [LEGAL.md](LEGAL.md);
 2. scores every listing with two local AI models: **risk** (is it a scam?) and **quality** (will the landlord reply to this student?);
 3. ranks listings for a student's profile by how likely the landlord is to reply, and explains why;
-4. drafts application e-mails and summaries with a local LLM (Ollama).
-3. ranks listings for a student's profile and explains the match;
 4. drafts application e-mails and summaries and translates German listing titles to English with a local LLM (Ollama).
 
 No cloud AI API is used. Everything runs on this machine.

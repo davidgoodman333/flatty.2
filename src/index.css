@@ -240,7 +240,7 @@ h1, h2, p { margin: 0; }
 .engine-note { display: block; margin-top: 14px; color: #9a898b; font-family: "Space Mono", monospace; font-size: 10px; letter-spacing: .05em; }
 
 /* Website filter, filter panel and sorting */
-/* One box: main filters (left), map (right), "More filters" opening inside it */
+/* One box: summary bar; opened, main filters (left) and map (right); "More filters" opens below */
 .filter-box { margin-bottom: 18px; border: 1px solid #d7dcd4; background: rgba(255,255,255,.43); }
 .quick-filters { display: grid; grid-template-columns: 1fr 380px; gap: 22px 28px; padding: 16px; }
 .quick-main { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
@@ -252,7 +252,18 @@ h1, h2, p { margin: 0; }
 .filter-toggle.active { border-color: #e55242; box-shadow: 2px 2px 0 #e55242; }
 .chevron { display: inline-flex; transition: transform 150ms; }
 .chevron.open { transform: rotate(180deg); }
-.filter-box-foot .reset-filters { margin: 0; }
+/* Closed: one summary bar. Open: main filters, then "More filters" as a second step */
+.filter-box.open { border-color: #d2c7c5; box-shadow: 5px 5px 0 #f2c8c0; }
+.filter-box-head { display: flex; align-items: center; gap: 16px; padding: 0 16px 0 0; }
+.filter-box-toggle { display: flex; flex: 1; align-items: center; gap: 14px; min-width: 0; min-height: 54px; padding: 9px 16px; border: 0; background: none; color: #4c2730; text-align: left; cursor: pointer; }
+.filter-box-title { flex: 0 0 auto; font-size: 15px; font-weight: 800; }
+.filter-summary { display: flex; flex: 1; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.filter-summary span { padding: 3px 9px; border: 1px solid #e6dcd9; background: #fffaf6; color: #6d5257; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.filter-box-action { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; color: #e55242; font-size: 13px; font-weight: 700; }
+.filter-box-toggle:hover .filter-box-action { text-decoration: underline; text-underline-offset: 3px; }
+.filter-box-toggle:focus-visible { outline: 2px solid #e55242; outline-offset: -2px; }
+.filter-box-head .reset-filters { flex: 0 0 auto; margin: 0; }
+.filter-box .quick-filters { border-top: 1px solid #e6dcd9; }
 /* Map with search radius */
 .map-radius { min-width: 0; }
 .map-box { position: relative; z-index: 0; height: 270px; border: 1px solid #d2c7c5; background: #f6ede7; }
@@ -453,6 +464,11 @@ h1, h2, p { margin: 0; }
   .quick-filters { grid-template-columns: 1fr; }
   .map-box { height: 230px; }
   .filter-box-foot { flex-wrap: wrap; }
+  .filter-box-head { flex-wrap: wrap; gap: 0; padding: 0; }
+  .filter-box-toggle { flex-wrap: wrap; flex-basis: 100%; }
+  .filter-summary { order: 3; flex-basis: 100%; }
+  .filter-box-action { margin-left: auto; }
+  .filter-box-head .reset-filters { margin: 0 16px 12px; }
   .filter-line { flex-wrap: wrap; gap: 10px; }
   .listing-details.with-photos { grid-template-columns: 1fr; }
 }

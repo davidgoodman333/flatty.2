@@ -40,7 +40,7 @@ const timeAgo = (value: string) => {
   return `${Math.round(hours / 24)} days ago`;
 };
 const formatDate = (value: string) => new Date(value).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-// Filters inside the "More filters" panel (type, price and must-haves are always visible).
+// Filters inside the "More filters" panel (the second step of the filter box).
 const countActiveFilters = (filters: Filters) =>
   [filters.roomsMin, filters.surfaceMin, filters.maxRisk, filters.availableBy].filter((value) => value !== null).length
   + (filters.rental !== "any" ? 1 : 0) + (filters.withPhotos ? 1 : 0) + (filters.sources.length ? 1 : 0);
@@ -99,6 +99,8 @@ export default function App() {
   const [listingError, setListingError] = useState("");
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [sort, setSort] = useState<SortKey>("reply");
+  // The filter box opens in two steps: main filters, then "More filters".
+  const [showMainFilters, setShowMainFilters] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [showAllFeatures, setShowAllFeatures] = useState(false);
   const [showBlockedSources, setShowBlockedSources] = useState(false);
@@ -221,6 +223,21 @@ export default function App() {
   };
 
   const numberOrNull = (value: string) => (value.trim() === "" ? null : Number(value));
+
+  // Shown in the closed filter box, so the current search is visible without opening it.
+  const selectedTypeLabels = TYPE_FILTERS.filter(([value]) => typeSelected(value)).map(([, label]) => label);
+  const moreFilterCount = countActiveFilters(filters);
+  const filterSummary = [
+    selectedTypeLabels.length ? selectedTypeLabels.join(", ") : "All types",
+    `CHF ${(filters.priceMin ?? BUDGET_MIN).toLocaleString("de-CH")} – ${budget.toLocaleString("de-CH")}`,
+    filters.features.length ? `${filters.features.length} must-have${filters.features.length === 1 ? "" : "s"}` : "",
+    filters.areaLat !== null ? `Within ${filters.radiusKm} km` : "",
+    moreFilterCount ? `${moreFilterCount} more` : "",
+  ].filter(Boolean);
+  const toggleMainFilters = () => {
+    if (showMainFilters) setShowFilters(false);
+    setShowMainFilters(!showMainFilters);
+  };
 
   const finishOnboarding = () => {
     setScreen("browse");
@@ -689,8 +706,24 @@ export default function App() {
 
           {activeTab === "search" ? (
             <section className="listings">
-              <div className="filter-box">
-                <div className="quick-filters">
+              <div className={showMainFilters ? "filter-box open" : "filter-box"}>
+                <div className="filter-box-head">
+                  <button aria-controls="main-filters" aria-expanded={showMainFilters} className="filter-box-toggle" onClick={toggleMainFilters} type="button">
+                    <span className="filter-box-title">Filters</span>
+                    <span className="filter-summary">
+                      {filterSummary.map((item) => <span key={item}>{item}</span>)}
+                    </span>
+                    <span className="filter-box-action">
+                      {showMainFilters ? "Hide" : "Edit"}
+                      <span className={showMainFilters ? "chevron open" : "chevron"}><Icon name="chevron" size={14} /></span>
+                    </span>
+                  </button>
+                  {hasAnyFilter(filters) && (
+                    <button className="reset-filters" onClick={() => setFilters(emptyFilters)} type="button">Reset filters</button>
+                  )}
+                </div>
+                {showMainFilters && (<>
+                <div className="quick-filters" id="main-filters">
                   <div className="quick-main">
                     <div className="filter-group">
                       <span>Type</span>
@@ -821,12 +854,10 @@ export default function App() {
                 )}
                 <div className="filter-box-foot">
                   <button className={showFilters ? "filter-toggle active" : "filter-toggle"} aria-expanded={showFilters} onClick={() => setShowFilters((value) => !value)} type="button">
-                    More filters{countActiveFilters(filters) > 0 && ` (${countActiveFilters(filters)})`} <span className={showFilters ? "chevron open" : "chevron"}><Icon name="chevron" size={14} /></span>
+                    {showFilters ? "Fewer filters" : "More filters"}{moreFilterCount > 0 && ` (${moreFilterCount})`} <span className={showFilters ? "chevron open" : "chevron"}><Icon name="chevron" size={14} /></span>
                   </button>
-                  {hasAnyFilter(filters) && (
-                    <button className="reset-filters" onClick={() => setFilters(emptyFilters)} type="button">Reset filters</button>
-                  )}
                 </div>
+                </>)}
               </div>
 
               <div className="filter-line">
@@ -927,6 +958,9 @@ export default function App() {
           <header className="listing-head">
             <span className="step-code">THE LISTING</span>
             <h1>{selectedApartment.title}</h1>
+            {selectedApartment.originalTitle && selectedApartment.originalTitle.toLowerCase() !== selectedApartment.title.toLowerCase() && (
+              <p>Original German title: “{selectedApartment.originalTitle}”</p>
+            )}
           </header>
           <section className={selectedApartment.images.length ? "listing-details with-photos" : "listing-details"}>
             {selectedApartment.images.length > 0 && (
