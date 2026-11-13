@@ -11,7 +11,7 @@ type Props = {
   onAreaChange: (area: Area | null, radiusKm: number) => void;
   listings: Apartment[];
   onSelect: (apartment: Apartment) => void;
-  colorFor: (match: number) => string;
+  colorFor: (apartment: Apartment) => string;
 };
 
 const BERN: L.LatLngExpression = [46.948, 7.4474];
@@ -69,7 +69,7 @@ export default function MapRadius({ area, radiusKm, onAreaChange, listings, onSe
     map.current.fitBounds(circle.getBounds(), { padding: [16, 16], maxZoom: 15 }); // keep the whole area in view
   }, [area, radiusKm]);
 
-  // Listings on this page, coloured by match like the badges in the list.
+  // Listings on this page, coloured by reply likelihood like the badges in the list.
   useEffect(() => {
     const layer = listingLayer.current;
     if (!layer) return;
@@ -77,9 +77,9 @@ export default function MapRadius({ area, radiusKm, onAreaChange, listings, onSe
     for (const apartment of listings) {
       if (apartment.lat == null || apartment.lng == null) continue;
       L.circleMarker([apartment.lat, apartment.lng], {
-        radius: 6, color: "#fff9f3", weight: 1.5, fillColor: colorFor(apartment.match), fillOpacity: 0.95,
+        radius: 6, color: "#fff9f3", weight: 1.5, fillColor: colorFor(apartment), fillOpacity: 0.95,
       })
-        .bindTooltip(`${apartment.title} · ${apartment.rent} · ${apartment.match}% match`, { direction: "top" })
+        .bindTooltip(`${apartment.title} · ${apartment.rent} · reply ${apartment.replyLabel.toLowerCase()}`, { direction: "top" })
         .on("click", (event) => {
           L.DomEvent.stopPropagation(event); // don't move the search area
           latest.current.onSelect(apartment);

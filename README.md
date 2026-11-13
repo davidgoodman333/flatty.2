@@ -1,6 +1,6 @@
 # Flatty
 
-Flatty helps students find a rental in Bern. It has a React front-end (Vite, Tailwind CSS) and a local Python back-end (FastAPI, scikit-learn, and an optional local LLM through Ollama). For how the back-end works, see [backend/README.md](backend/README.md).
+Flatty helps students find a rental in Bern. It has a React front-end (Vite, Tailwind CSS) and a local Python back-end (FastAPI, scikit-learn, and an optional local LLM through Ollama). For how the back-end works, see [backend/README.md](backend/README.md). For every use of AI in the prototype and how far each one is, see [AI_USE_CASES.md](AI_USE_CASES.md).
 
 ## Set up on a new Mac
 

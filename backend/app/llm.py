@@ -378,12 +378,13 @@ def template_email(listing: dict, profile: dict) -> str:
 
 
 def template_summary(listing: dict) -> str:
-    reasons = "; ".join(f"{r['title'].lower()} ({r['detail']})" for r in listing.get("reasons", [])[:4])
+    facts = (listing.get("notes") or []) + (listing.get("reasons") or [])
+    reasons = "; ".join(f"{r['title'].lower()} ({r['detail']})" for r in facts[:4])
     flags = listing.get("riskFlags") or []
     risk = f" Warning signs: {'; '.join(flags).lower()}." if flags else " No warning signs were found in the text."
     return (
         f"{listing.get('title')} in {listing.get('area')}. {listing.get('meta')} for {listing.get('rent')} per month. "
-        f"{reasons.capitalize()}.{risk} Match {listing.get('match')} %, risk {listing.get('risk')} %."
+        f"{reasons.capitalize()}.{risk} A reply from the landlord is {(listing.get('replyLabel') or 'not rated').lower()}; risk {listing.get('risk')} %."
     )
 
 
@@ -416,8 +417,10 @@ def generate(kind: str, listing: dict, profile: dict) -> dict:
             "at most 90 words. Use only the facts given. Mention warning signs if there are any."
         )
         user = (
-            f"{_listing_facts(listing)}\nMatch: {listing.get('match')} %\nScam risk: {listing.get('risk')} %\n"
-            f"Why it fits: {[r['title'] + ' - ' + r['detail'] for r in listing.get('reasons', [])]}\n"
+            f"{_listing_facts(listing)}\nWill the landlord reply: {listing.get('replyLabel')}\n"
+            f"Scam risk: {listing.get('risk')} %\n"
+            f"What affects the reply likelihood: {[r['title'] + ' - ' + r['detail'] for r in listing.get('reasons') or []]}\n"
+            f"Compared with the student's preferences: {[r['title'] + ' - ' + r['detail'] for r in listing.get('notes') or []]}\n"
             f"Warning signs: {listing.get('riskFlags') or 'none'}"
         )
     try:

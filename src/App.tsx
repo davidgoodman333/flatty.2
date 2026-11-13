@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiError, ApiUnavailable, checkLink, checkListingOnline, demoApartments, emptyFilters, fetchSources, generateText, matchListings,
-  PAGE_SIZE, type Apartment, type Filters, type ListingStatus, type Profile, type SortKey, type SourceInfo,
+  PAGE_SIZE, type Apartment, type Filters, type ListingStatus, type Profile, type Reason, type SortKey, type SourceInfo,
 } from "./api";
 import Icon from "./Icon";
 import { APARTMENT_TYPES, AREAS, BUDGET_MAX, BUDGET_MIN, COUNTRIES, MAIN_LANGUAGES, OTHER_LANGUAGES, PRIORITIES } from "./options";
@@ -9,7 +9,7 @@ import MapRadius from "./MapRadius";
 import PreferencesDrawer from "./PreferencesDrawer";
 
 const SORT_OPTIONS: [SortKey, string][] = [
-  ["match", "Best match"], ["price_asc", "Price: low to high"], ["price_desc", "Price: high to low"],
+  ["reply", "Best reply chance"], ["price_asc", "Price: low to high"], ["price_desc", "Price: high to low"],
   ["newest", "Newest first"], ["risk", "Lowest risk"], ["commute", "Shortest commute"], ["size", "Largest first"],
 ];
 const TYPE_FILTERS: [string, string, string][] = [
@@ -48,19 +48,12 @@ const countActiveFilters = (filters: Filters) =>
 const hasAnyFilter = (filters: Filters) =>
   countActiveFilters(filters) > 0 || filters.priceMin !== null || filters.features.length > 0 || filters.areaLat !== null;
 
-// Match colour: red-orange for weak matches, through amber, to green for strong ones.
-const matchColor = (match: number) => {
-  const strength = Math.min(1, Math.max(0, (match - 40) / 50));
-  return `hsl(${Math.round(8 + strength * 127)} 48% 36%)`;
-};
+// Map marker colour per reply level, the same colours as the "Reply …" badges in the list.
+const replyColor = (apartment: Apartment) => (apartment.replyLevel === "likely" ? "#e55242" : "#4c2730");
 
 type Screen = "welcome" | "about" | "onboarding" | "browse" | "result";
-const matchHeadline = (match: number) => {
-  if (match >= 80) return "Strong match.";
-  if (match >= 60) return "Good match.";
-  if (match >= 40) return "Possible match.";
-  return "Weak match.";
-};
+const WEIGHTS_NOTE = "How much each point counts is Flatty's own assumption. It is not yet checked against real replies.";
+const signedShare = (reason: Reason) => `${reason.tone === "warn" ? "−" : "+"}${reason.share}%`;
 
 const naturalList = (items: string[]) => {
   if (items.length <= 1) return items[0] || "";
@@ -105,7 +98,7 @@ export default function App() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [listingError, setListingError] = useState("");
   const [filters, setFilters] = useState<Filters>(emptyFilters);
-  const [sort, setSort] = useState<SortKey>("match");
+  const [sort, setSort] = useState<SortKey>("reply");
   const [showFilters, setShowFilters] = useState(false);
   const [showAllFeatures, setShowAllFeatures] = useState(false);
   const [showBlockedSources, setShowBlockedSources] = useState(false);
@@ -282,7 +275,7 @@ export default function App() {
 
   const fallbackText = (kind: "summary" | "email") => {
     if (kind === "summary") {
-      return `${selectedApartment.title} in ${selectedApartment.area}. ${selectedApartment.meta} for ${selectedApartment.rent} per month. ${selectedApartment.reasons.map((reason) => reason.title).join(", ")}.`;
+      return `${selectedApartment.title} in ${selectedApartment.area}. ${selectedApartment.meta} for ${selectedApartment.rent} per month. ${[...(selectedApartment.notes ?? []), ...selectedApartment.reasons].map((reason) => reason.title).join(", ")}.`;
     }
     return [
       "Hello,",
@@ -334,7 +327,7 @@ export default function App() {
             <span className="brand-mark"><Icon name="home" size={16} /></span>
             <span>Flatty</span>
           </button>
-          {(screen === "browse" || screen === "result") && <span className="header-pref">{preferenceText}</span>}
+          {screen === "browse" && <span className="header-pref">{preferenceText}</span>}
           {(screen === "browse" || screen === "result") && (
             <button aria-haspopup="dialog" className="edit-button" onClick={() => setShowPreferences(true)} type="button">
               Edit profile
@@ -444,7 +437,7 @@ export default function App() {
                 <span className="tree-number">03</span>
                 <span className="tree-card-icon"><Icon name="check" size={21} /></span>
                 <h3>Your preferences</h3>
-                <p>Budget, location, commute, language, and daily needs shape the match.</p>
+                <p>Your budget and filters decide which listings you see.</p>
               </article>
               <article className="tree-card">
                 <span className="tree-number">04</span>
@@ -461,7 +454,7 @@ export default function App() {
               <div>
                 <span className="tree-number">05</span>
                 <h2>Your best chances</h2>
-                <p>See apartments and rooms where you have the strongest fit.</p>
+                <p>See how likely each landlord is to reply to you.</p>
               </div>
               <button onClick={() => { setStep(1); setScreen("onboarding"); }} type="button">
                 Start matching <Icon name="arrow" size={18} />
@@ -686,7 +679,7 @@ export default function App() {
       {screen === "browse" && (
         <main className="browse-page">
           <div className="browse-heading">
-            <div><span className="step-code">YOUR SEARCH</span><h1>Find a good match.</h1></div>
+            <div><span className="step-code">YOUR SEARCH</span><h1>Find your flat.</h1></div>
             <div className="pixel-pin" aria-hidden="true" />
           </div>
           <div className="tabs">
@@ -751,7 +744,7 @@ export default function App() {
                   </div>
                   <MapRadius
                     area={filters.areaLat !== null && filters.areaLng !== null ? { lat: filters.areaLat, lng: filters.areaLng } : null}
-                    colorFor={matchColor}
+                    colorFor={replyColor}
                     listings={apartments}
                     onAreaChange={(area, radiusKm) => updateFilters({ areaLat: area?.lat ?? null, areaLng: area?.lng ?? null, radiusKm })}
                     onSelect={checkApartment}
@@ -866,7 +859,7 @@ export default function App() {
                       ) : (
                         <div className="pixel-windows"><i /><i /><i /><i /></div>
                       )}
-                      <span className="match-badge" style={{ background: matchColor(apartment.match) }}>{apartment.match}% match</span>
+                      <span className={`reply-badge ${apartment.replyLevel}`}>Reply {apartment.replyLabel.toLowerCase()}</span>
                       <span className={`risk-badge ${riskLevel(apartment.risk).tone}`}>{apartment.risk}% risk</span>
                     </div>
                     <div className="apartment-info">
@@ -880,7 +873,7 @@ export default function App() {
                       <p>{apartment.meta}</p>
                       <div className="mini-tags">{apartment.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
                     </div>
-                    <div className="apartment-action"><strong>{apartment.rent}<small>/month</small></strong><button onClick={() => checkApartment(apartment)} type="button">Check fit <Icon name="arrow" size={16} /></button></div>
+                    <div className="apartment-action"><strong>{apartment.rent}<small>/month</small></strong><button onClick={() => checkApartment(apartment)} type="button">Check listing <Icon name="arrow" size={16} /></button></div>
                   </article>
                 ))}
               </div>
@@ -898,7 +891,7 @@ export default function App() {
               <div className="link-input">
                 <input value={link} onChange={(event) => setLink(event.target.value)} placeholder="https://..." />
                 <button onClick={() => checkPastedListing({ url: link })} disabled={!link.trim() || checkingLink} type="button">
-                  {checkingLink ? "Checking…" : "Check fit"} <Icon name="arrow" size={17} />
+                  {checkingLink ? "Checking…" : "Check listing"} <Icon name="arrow" size={17} />
                 </button>
               </div>
               {linkProblem && <p className="link-error">{linkProblem.message}</p>}
@@ -966,6 +959,10 @@ export default function App() {
             </div>
           </section>
 
+          <header className="listing-head">
+            <span className="step-code">THE LISTING</span>
+            <h1>{selectedApartment.title}</h1>
+          </header>
           <section className={selectedApartment.images.length ? "listing-details with-photos" : "listing-details"}>
             {selectedApartment.images.length > 0 && (
               <div className="gallery">
@@ -981,12 +978,12 @@ export default function App() {
                     ))}
                   </div>
                 )}
-                <small className="photo-credit">Photos: {selectedApartment.sourceName}, shown from the original listing</small>
               </div>
             )}
             <div className="detail-facts">
               <span className="step-code">LISTING DETAILS</span>
               <dl>
+                <div><dt>Area</dt><dd>{selectedApartment.area}</dd></div>
                 <div><dt>Rent</dt><dd>{selectedApartment.rent} / month{selectedApartment.rentNet && selectedApartment.rentCharges ? ` (${formatChf(selectedApartment.rentNet)} + ${formatChf(selectedApartment.rentCharges)} charges)` : ""}</dd></div>
                 <div><dt>Type</dt><dd>{KIND_DESCRIPTIONS[selectedApartment.kind] ?? selectedApartment.kind}</dd></div>
                 {selectedApartment.originalTitle && selectedApartment.originalTitle.toLowerCase() !== selectedApartment.title.toLowerCase() && (
@@ -1000,12 +997,64 @@ export default function App() {
                 ) : null}
                 <div><dt>Rental</dt><dd>{selectedApartment.isTemporary ? "Temporary / sublet" : "Long-term"}</dd></div>
                 {selectedApartment.yearBuilt ? <div><dt>Built</dt><dd>{selectedApartment.yearBuilt}</dd></div> : null}
-                <div><dt>Website</dt><dd>{selectedApartment.sourceName}</dd></div>
+                <div>
+                  <dt>Website</dt>
+                  <dd>
+                    {selectedApartment.url ? (
+                      <a className="detail-link" href={selectedApartment.url} rel="noreferrer" target="_blank">
+                        View the original listing on {selectedApartment.sourceName === "Pasted listing" ? "the website" : selectedApartment.sourceName} ↗
+                      </a>
+                    ) : selectedApartment.sourceName}
+                  </dd>
+                </div>
                 {selectedApartment.published ? <div><dt>Listed</dt><dd>{formatDate(selectedApartment.published)}</dd></div> : null}
               </dl>
               {selectedApartment.features.length > 0 && (
                 <div className="mini-tags detail-features">{selectedApartment.features.map((feature) => <span key={feature}>{feature}</span>)}</div>
               )}
+            </div>
+          </section>
+
+          {(selectedApartment.notes?.length ?? 0) > 0 && (
+            <section className="listing-notes">
+              <span className="step-code">COMPARED WITH YOUR PREFERENCES</span>
+              <div className="notes-grid">
+                {selectedApartment.notes?.map((note) => (
+                  <div key={note.title}>
+                    {note.tone === "warn" ? <span className="fit-icon warn">!</span> : <span className="fit-icon yes"><Icon name={note.icon} size={15} /></span>}
+                    <p><strong>{note.title}</strong><small>{note.detail}</small></p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          <section className="result-layout">
+            <div className={`score-panel reply-${selectedApartment.replyLevel}`}>
+              <span className="step-code">WILL THE LANDLORD REPLY?</span>
+              <h1>{selectedApartment.replyLabel}.</h1>
+              <div className="score-box"><strong>{Math.round(selectedApartment.replyScore * 100)}</strong><span>%</span></div>
+              <p>Flatty’s estimate of the chance that this landlord replies to you. From 50% it counts as likely.</p>
+            </div>
+            <div className="fit-panel">
+              <h2>What affects your reply chance</h2>
+              {selectedApartment.reasons.length > 0 ? (
+                <>
+                  <p className="fit-empty">Each percentage is how much that point counts. Together they make 100%. + raises your chance, − lowers it.</p>
+                  <div className="fit-list">
+                    {selectedApartment.reasons.map((reason) => (
+                      <div key={reason.title}>
+                        {reason.tone === "warn" ? <span className="fit-icon warn">!</span> : <span className="fit-icon yes"><Icon name={reason.icon} size={15} /></span>}
+                        <p><strong>{reason.title}</strong><small>{reason.detail}</small></p>
+                        <span className={`share ${reason.tone}`}>{signedShare(reason)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <p className="fit-empty">Nothing in this listing or your profile raises or lowers your reply chance.</p>
+              )}
+              <p className="fit-empty">{WEIGHTS_NOTE}</p>
             </div>
           </section>
 
