@@ -4,8 +4,8 @@ Local back-end for the Flatty prototype. It:
 
 1. collects Bern rental listings from **Flatfox**, the **Uni Bern Welcome Center housing board** and **studentlodge.ch**. Other sites are disabled because their terms forbid it or they block bots; see [LEGAL.md](LEGAL.md);
 2. scores every listing with two local AI models: **risk** (is it a scam?) and **quality** (will the landlord reply to this student?);
-3. ranks listings for a student's profile and explains the match;
-4. drafts application e-mails and summaries with a local LLM (Ollama).
+3. ranks listings for a student's profile by how likely the landlord is to reply, and explains why;
+4. drafts application e-mails and summaries and translates German listing titles to English with a local LLM (Ollama).
 
 No cloud AI API is used. Everything runs on this machine.
 
@@ -52,9 +52,10 @@ All requests share one rate limit per site (one request every 2 s) and a robots.
 |---|---|---|
 | GET | `/api/health` | Listing count, last scraper run, model versions, whether the LLM is available |
 | GET | `/api/sources` | Every source with its robots.txt and terms assessment, and the number of stored listings |
-| POST | `/api/match` | `{profile, filters, sort, offset, limit}` → `{total, listings, sourceCounts}`. Each listing has match %, risk %, reasons, warning signs, photos, features and details |
+| POST | `/api/match` | `{profile, filters, sort, offset, limit}` → `{total, listings, sourceCounts}`. Each listing has `replyLevel` (`likely`/`unlikely`), `replyLabel`, risk %, `reasons` (what affects the reply likelihood, each with a `share`: its percentage of the weights of all facts that apply, adding up to 100; `tone` `yes` raises the chance, `warn` lowers it), `notes` (how it compares with the student's preferences), warning signs, photos, features and details |
 | POST | `/api/check-link` | `{profile, url}` or `{profile, text}` → one scored listing. Returns 451 for sites whose terms forbid automated reading |
-| POST | `/api/generate` | `{kind: "email" \| "summary", listing, profile}` → text from the local LLM, or from a template if Ollama isn't running |
+| POST | `/api/generate` | `{kind: "email" \| "summary" \| "title", listing, profile}` → text from the local LLM, or from a template/glossary if Ollama isn't running |
+| POST | `/api/translate-title` | `{title}` → `{title, originalTitle, engine}` (translates German listing title to English) |
 | GET | `/api/listings/{id}/check` | Is this listing still online at its source? One request, cached for an hour |
 | POST | `/api/scrape` | Starts a scraper run in the background (the daily refresh does this automatically) |
 
@@ -69,7 +70,7 @@ The `profile` has the same fields as the onboarding in `src/App.tsx`.
 
 Without `priceMax`, listings more than 15 % over the student's budget are hidden.
 
-`sort`: `match`, `price_asc`, `price_desc`, `newest`, `risk`, `commute` or `size`.
+`sort`: `reply` (default), `price_asc`, `price_desc`, `newest`, `risk`, `commute` or `size`.
 
 ## The models
 
@@ -123,11 +124,11 @@ The weights are in `QUALITY_PRIOR`. Once `data/labels/reply_labels.csv` has 30 o
 | Apartment | Self-contained with 2+ rooms, or a 1–1.5-room flat over 50 m². |
 | House | The source lists a house. |
 
-The type filter and the match % both use these rules. Market prices compare rooms with rooms and flats with flats.
+The type filter and the notes on each listing both use these rules. Market prices compare rooms with rooms and flats with flats.
 
-**Match %** = 60 % preference fit (budget, area, apartment type, estimated commute) + 40 % quality score. The risk score is shown next to it but never filters anything out.
+**Reply likelihood** is the quality score on its own, shown as "likely" (probability of 50 % or more) or "unlikely". It is the headline and the default sort order. The probability is returned as `replyScore`; the app shows it as a percentage on the listing page only, and uses it to sort. There is no match score: budget, area, type and commute are reported as plain `notes` on each listing and are not part of any number. The risk score is shown next to the reply likelihood but never filters anything out.
 
-**E-mails and summaries** come from `qwen3:8b` through Ollama on `127.0.0.1:11434`. To use another model, set `FLATTY_OLLAMA_MODEL`.
+**E-mails, summaries and title translations** come from `qwen3:8b` through Ollama on `127.0.0.1:11434`. To use another model, set `FLATTY_OLLAMA_MODEL`. If Ollama is offline or unavailable, deterministic templates and an extensive Swiss rental glossary serve as transparent local fallbacks.
 
 ## Folders
 

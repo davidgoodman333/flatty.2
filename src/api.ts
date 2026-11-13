@@ -1,9 +1,10 @@
 // Client for the local Flatty back-end (backend/). Falls back to demo data when it isn't running,
 // so the hosted Figma preview keeps working.
 
-export type ReasonIcon = "check" | "home" | "mail" | "search" | "shop" | "train" | "work";
+export type ReasonIcon = "check" | "home" | "mail" | "map" | "search" | "shop" | "train" | "work";
 
-export type Reason = { tone: "yes" | "warn"; icon: ReasonIcon; title: string; detail: string };
+export type Reason = { tone: "yes" | "warn"; icon: ReasonIcon; title: string; detail: string; share?: number };
+export type ReplyLevel = "likely" | "unlikely";
 
 export type Photo = { thumb: string; full: string };
 
@@ -16,6 +17,7 @@ export type Apartment = {
   area: string;
   city?: string;
   title: string;
+  originalTitle?: string;
   price: number;
   rent: string;
   meta: string;
@@ -32,14 +34,16 @@ export type Apartment = {
   images: Photo[];
   lat?: number | null;
   lng?: number | null;
-  match: number;
+  replyLevel: ReplyLevel;
+  replyLabel: string;
+  replyScore: number;
   risk: number;
-  quality?: number;
   commuteMinutes?: number | null;
   language?: string;
   movingDate?: string | null;
   tags: string[];
   reasons: Reason[];
+  notes?: Reason[];
   riskFlags: string[];
   riskPositives?: string[];
   riskText?: number | null;
@@ -68,7 +72,7 @@ export const emptyFilters: Filters = {
   maxRisk: null, rental: "any", withPhotos: false, availableBy: null, areaLat: null, areaLng: null, radiusKm: 2,
 };
 
-export type SortKey = "match" | "price_asc" | "price_desc" | "newest" | "risk" | "commute" | "size";
+export type SortKey = "reply" | "price_asc" | "price_desc" | "newest" | "risk" | "commute" | "size";
 
 export type SourceInfo = { key: string; name: string; scraping_allowed: boolean; decision: string; terms: string; listings: number };
 
@@ -178,30 +182,47 @@ export async function generateText(kind: "email" | "summary", listing: Apartment
   return post<{ text: string; engine: string }>("/generate", { kind, listing, profile });
 }
 
+export async function translateTitle(title: string): Promise<{ title: string; originalTitle: string; engine: string }> {
+  try {
+    return await post<{ title: string; originalTitle: string; engine: string }>("/translate-title", { title });
+  } catch {
+    return { title, originalTitle: title, engine: "template" };
+  }
+}
+
 export const demoApartments: Apartment[] = [
   {
-    id: "demo:1", source: "demo", sourceName: "Demo", kind: "Apartment", features: ["Balcony or garden"], images: [], url: "", area: "Breitenrain", title: "Bright 2.5-room apartment", price: 1720, rent: "CHF 1,720",
-    meta: "58 m² · 2.5 rooms", match: 92, risk: 8, tags: ["7 min to uni", "Tram nearby"], riskFlags: [],
+    id: "demo:1", source: "demo", sourceName: "Demo", kind: "Apartment", features: ["Balcony or garden"], images: [], url: "", area: "Breitenrain", title: "Bright 2.5-room apartment", originalTitle: "Helle 2.5-Zimmer-Wohnung im Breitenrain", price: 1720, rent: "CHF 1,720",
+    meta: "58 m² · 2.5 rooms", replyLevel: "likely", replyLabel: "Likely", replyScore: 0.78, risk: 8, tags: ["7 min to uni", "Tram nearby"], riskFlags: [],
     reasons: [
+      { tone: "yes", icon: "home", title: "Private landlord", detail: "Private landlords reply to students more often than agencies", share: 46 },
+      { tone: "yes", icon: "work", title: "Student-friendly", detail: "The listing mentions students", share: 54 },
+    ],
+    notes: [
       { tone: "yes", icon: "check", title: "Within your budget", detail: "CHF 80 below your maximum" },
       { tone: "yes", icon: "train", title: "Easy commute", detail: "7 minutes to your university" },
-      { tone: "yes", icon: "shop", title: "Daily needs nearby", detail: "Transit and groceries within 500 m" },
       { tone: "warn", icon: "home", title: "Smaller than average", detail: "6 m² below similar listings" },
     ],
   },
   {
-    id: "demo:2", source: "demo", sourceName: "Demo", kind: "Apartment", features: [], images: [], url: "", area: "Länggasse", title: "Quiet apartment near Uni Bern", price: 1890, rent: "CHF 1,890",
-    meta: "64 m² · 3 rooms", match: 86, risk: 27, tags: ["4 min to uni", "Shops nearby"], riskFlags: ["Pushes contact off the platform (WhatsApp, private e-mail)"],
+    id: "demo:2", source: "demo", sourceName: "Demo", kind: "Apartment", features: [], images: [], url: "", area: "Länggasse", title: "Quiet apartment near Uni Bern", originalTitle: "Ruhige Wohnung nahe Uni Bern", price: 1890, rent: "CHF 1,890",
+    meta: "64 m² · 3 rooms", replyLevel: "likely", replyLabel: "Likely", replyScore: 0.56, risk: 27, tags: ["4 min to uni", "Shops nearby"], riskFlags: ["Pushes contact off the platform (WhatsApp, private e-mail)"],
     reasons: [
+      { tone: "yes", icon: "home", title: "Private landlord", detail: "Private landlords reply to students more often than agencies", share: 100 },
+    ],
+    notes: [
       { tone: "warn", icon: "check", title: "Slightly over budget", detail: "CHF 90 above your maximum" },
       { tone: "yes", icon: "train", title: "Easy commute", detail: "4 minutes to your university" },
     ],
   },
   {
-    id: "demo:3", source: "demo", sourceName: "Demo", kind: "Apartment", features: [], images: [], url: "", area: "Mattenhof", title: "Renovated city apartment", price: 1650, rent: "CHF 1,650",
-    meta: "51 m² · 2 rooms", match: 74, risk: 68, tags: ["18 min to uni", "Bus nearby"],
+    id: "demo:3", source: "demo", sourceName: "Demo", kind: "Apartment", features: [], images: [], url: "", area: "Mattenhof", title: "Renovated city apartment", originalTitle: "Renovierte Stadtwohnung im Mattenhof", price: 1650, rent: "CHF 1,650",
+    meta: "51 m² · 2 rooms", replyLevel: "unlikely", replyLabel: "Unlikely", replyScore: 0.31, risk: 68, tags: ["18 min to uni", "Bus nearby"],
     riskFlags: ["No viewing offered or the owner is abroad", "Asks for a deposit or payment before a viewing"],
     reasons: [
+      { tone: "warn", icon: "search", title: "Cheap for the area", detail: "Expect many other applicants", share: 100 },
+    ],
+    notes: [
       { tone: "yes", icon: "check", title: "Within your budget", detail: "CHF 150 below your maximum" },
       { tone: "warn", icon: "train", title: "Longer commute", detail: "18 minutes to your university" },
     ],

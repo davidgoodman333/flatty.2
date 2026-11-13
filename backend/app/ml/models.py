@@ -127,6 +127,12 @@ class QualityModel:
         self.trained = joblib.load(QUALITY_PATH) if QUALITY_PATH.exists() else None
         self.version = self.trained["version"] if self.trained else "quality-prior-v0"
 
+    def weights(self) -> dict[str, float]:
+        """Log-odds weight per feature: learned if a trained model exists, otherwise the prior."""
+        if self.trained:
+            return dict(zip(QUALITY_FEATURES, self.trained["model"].coef_[0].tolist()))
+        return {name: QUALITY_PRIOR[name] for name in QUALITY_FEATURES}
+
     def predict(self, listing: dict, profile: dict, market: dict) -> tuple[float, dict[str, float]]:
         features = quality_features(listing, profile, market)
         if self.trained:

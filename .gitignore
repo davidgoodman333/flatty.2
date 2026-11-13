@@ -21,3 +21,4 @@ logs/
 /.opencode-skills/
 
 .DS_Store
+.idea/
