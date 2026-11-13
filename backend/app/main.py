@@ -75,7 +75,7 @@ class Filters(BaseModel):
 class MatchRequest(BaseModel):
     profile: Profile
     filters: Filters = Filters()
-    sort: str = Field("match", pattern="^(match|price_asc|price_desc|newest|risk|commute|size)$")
+    sort: str = Field("reply", pattern="^(reply|price_asc|price_desc|newest|risk|commute|size)$")
     offset: int = Field(0, ge=0)
     limit: int = Field(30, ge=1, le=200)
 

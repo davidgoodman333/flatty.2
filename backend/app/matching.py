@@ -1,8 +1,13 @@
-"""Rank listings for one student profile and explain each match.
+"""Rank listings for one student profile and explain each one.
 
-match % = 60 % preference fit (budget, area, type, commute) + 40 % quality model
-          (how likely the landlord replies to this particular student).
-The risk score is shown separately and never removes a listing; the UI warns instead.
+reply    how likely the landlord replies to this particular student (quality model). Shown as
+         a level (likely or unlikely), never as a number: the weights behind it are
+         assumptions, and a percentage would look more exact than it is. This is the headline
+         and the default sort order.
+risk %   shown separately; it never removes a listing, the UI warns instead.
+
+There is no "match" score: budget, type and the other preferences are filters, and how a
+listing compares with them is reported as plain notes, not as a number.
 """
 
 import re
@@ -35,21 +40,70 @@ def matches_type(listing: dict, wanted: list[str]) -> bool:
     return not wanted or any(TYPE_CHOICES[item](kind, rooms) for item in wanted if item in TYPE_CHOICES)
 
 
-def budget_fit(price: float, budget: float) -> float:
-    if price <= budget:
-        return 1.0
-    return max(0.0, 1 - (price / budget - 1) / (BUDGET_TOLERANCE - 1))
-
-
-def commute_fit(minutes: int) -> float:
-    return 1.0 if minutes <= 12 else max(0.2, 1 - (minutes - 12) / 35)
-
-
-def area_fit(area: str, city: str, wanted: list[str]) -> float:
+def in_wanted_area(area: str, city: str, wanted: list[str]) -> bool | None:
+    """None if the student didn't choose an area."""
     if not wanted or "Anywhere" in wanted:
-        return 1.0
-    names = {area.lower(), (city or "").lower()}
-    return 1.0 if any(item.lower() in names for item in wanted) else 0.45
+        return None
+    return any(item.lower() in {area.lower(), (city or "").lower()} for item in wanted)
+
+
+# What each reply-likelihood feature means for the student: (icon, title, detail).
+# Whether it helps or hurts comes from the sign of the model's weight for that feature.
+REPLY_FACTORS = {
+    "private_landlord": ("home", "Private landlord", "Private landlords reply to students more often than agencies"),
+    "mentions_students": ("work", "Student-friendly", "The listing mentions students"),
+    "shared_flat": ("home", "Room in a shared flat", "Shared flats are often let to students"),
+    "furnished_or_temporary": ("home", "Furnished or temporary", "Aimed at people who are new in town"),
+    "cheap_for_market": ("search", "Cheap for the area", "Expect many other applicants"),
+    "expensive_for_market": ("search", "Rent above the usual level", "Fewer people apply for expensive listings"),
+    "language_barrier": ("mail", "Listing in a language you don't speak", "Your reply chances improve if you answer in the listing's language"),
+    "has_permit": ("check", "You have a residence permit", "Landlords often ask for one"),
+    "has_swiss_phone": ("check", "You have a Swiss phone number", "Landlords can reach you easily"),
+    "has_swiss_bank": ("check", "You have a Swiss bank account", "Rent and deposit are simple to arrange"),
+    "has_guarantor": ("check", "You have a guarantor in Switzerland", "This lowers the landlord's risk"),
+    "has_viewing_person": ("check", "Someone can attend viewings for you", "You can react to viewing dates quickly"),
+}
+
+
+# Reply likelihood shown to the student: "likely" means more likely than not.
+LIKELY_FROM = 0.5
+
+
+def reply_level(probability: float) -> tuple[str, str]:
+    return ("likely", "Likely") if probability >= LIKELY_FROM else ("unlikely", "Unlikely")
+
+
+def shares(weights: list[float]) -> list[int]:
+    """Each weight's share of the total absolute weight, in whole percent that add up to 100."""
+    total = sum(abs(w) for w in weights)
+    if not total:
+        return [0] * len(weights)
+    exact = [100 * abs(w) / total for w in weights]
+    result = [int(x) for x in exact]
+    # Largest remainder: hand out the missing points to the largest fractions.
+    for i in sorted(range(len(exact)), key=lambda i: result[i] - exact[i])[:100 - sum(result)]:
+        result[i] += 1
+    return result
+
+
+def reply_reasons(features: dict[str, float], weights: dict[str, float], language: str) -> list[dict]:
+    """The facts behind the reply likelihood, strongest first.
+
+    `share` is how much each fact counts towards the score, as a percentage of all facts that
+    apply (they add up to 100); `tone` says whether it raises ("yes") or lowers ("warn") it.
+    """
+    active = [name for name in sorted(features, key=lambda name: -abs(weights.get(name, 0)))
+              if features[name] and weights.get(name, 0)]
+    reasons = []
+    for name, share in zip(active, shares([weights[name] for name in active])):
+        icon, title, detail = REPLY_FACTORS[name]
+        if name == "language_barrier":
+            title = f"Listing written in {language}"
+        reasons.append({
+            "tone": "yes" if weights[name] > 0 else "warn", "icon": icon, "title": title, "detail": detail,
+            "share": share,
+        })
+    return reasons
 
 
 def card(listing: dict, profile: dict, market: dict, quality_model: QualityModel, enforce_budget: bool = True) -> dict | None:
@@ -64,45 +118,43 @@ def card(listing: dict, profile: dict, market: dict, quality_model: QualityModel
     type_ok = matches_type(listing, profile.get("apartmentTypes") or [])
     language = detect_language(f"{listing.get('title')} {listing.get('description')}")
 
-    preference = (
-        0.35 * budget_fit(price, budget)
-        + 0.25 * area_fit(area, listing.get("city"), profile.get("areas") or [])
-        + 0.20 * (1.0 if type_ok else 0.3)
-        + 0.20 * (commute_fit(minutes) if minutes is not None else 0.6)
-    )
     quality, quality_features = quality_model.predict(listing, profile, market)
-    match = round(100 * (0.6 * preference + 0.4 * quality))
+    level, level_label = reply_level(quality)
     risk = round(100 * (listing.get("risk_score") or 0))
 
-    reasons = []
+    # Why the reply likelihood is what it is.
+    reasons = reply_reasons(quality_features, quality_model.weights(), language)
+
+    # How the listing compares with what the student asked for. Not part of any score.
+    notes = []
     if price <= budget:
-        reasons.append({"tone": "yes", "icon": "check", "title": "Within your budget", "detail": f"CHF {budget - price:,.0f} below your maximum".replace(",", "’")})
+        notes.append({"tone": "yes", "icon": "check", "title": "Within your budget", "detail": f"CHF {budget - price:,.0f} below your maximum".replace(",", "’")})
     else:
-        reasons.append({"tone": "warn", "icon": "check", "title": "Slightly over budget", "detail": f"CHF {price - budget:,.0f} above your maximum".replace(",", "’")})
+        notes.append({"tone": "warn", "icon": "check", "title": "Slightly over budget", "detail": f"CHF {price - budget:,.0f} above your maximum".replace(",", "’")})
     if minutes is not None:
         place = destination_name if exact else f"{destination_name} (we couldn't place “{profile.get('destination')}”)"
-        reasons.append({
+        notes.append({
             "tone": "yes" if minutes <= 20 else "warn", "icon": "train",
             "title": "Easy commute" if minutes <= 20 else "Longer commute",
             "detail": f"About {minutes} min to {place} by public transport (estimate)",
         })
+    wanted_areas = [a for a in profile.get("areas") or [] if a]
+    in_area = in_wanted_area(area, listing.get("city"), wanted_areas)
+    if in_area is not None:
+        notes.append({
+            "tone": "yes" if in_area else "warn", "icon": "map",
+            "title": "In an area you chose" if in_area else "Outside the areas you chose",
+            "detail": f"{area}; you chose {', '.join(wanted_areas)}",
+        })
     if not type_ok:
         chosen = ", ".join(t.lower() for t in profile.get("apartmentTypes") or [])
-        reasons.append({"tone": "warn", "icon": "home", "title": "Different type than you chose", "detail": f"This is a {_type_label(listing).lower()}; you chose {chosen}"})
+        notes.append({"tone": "warn", "icon": "home", "title": "Different type than you chose", "detail": f"This is a {_type_label(listing).lower()}; you chose {chosen}"})
     if classify(listing) == ROOM and re.search(r"studio", listing.get("title") or "", re.IGNORECASE):
-        reasons.append({"tone": "warn", "icon": "home", "title": "Called a studio, but the kitchen is shared", "detail": "Flatty counts it as a room: a studio has its own kitchen and bathroom"})
-    if quality_features["private_landlord"]:
-        reasons.append({"tone": "yes", "icon": "home", "title": "Private landlord", "detail": "Private landlords reply to students more often than agencies"})
-    if quality_features["mentions_students"]:
-        reasons.append({"tone": "yes", "icon": "work", "title": "Student-friendly", "detail": "The listing mentions students"})
-    if quality_features["language_barrier"]:
-        reasons.append({"tone": "warn", "icon": "mail", "title": f"Listing written in {language}", "detail": "Your reply chances improve if you answer in the listing's language"})
+        notes.append({"tone": "warn", "icon": "home", "title": "Called a studio, but the kitchen is shared", "detail": "Flatty counts it as a room: a studio has its own kitchen and bathroom"})
     if listing.get("surface") and price and not is_shared(listing):
         typical = price / market["per_sqm"]  # m² that this rent usually buys in Bern
         if listing["surface"] < typical * 0.9:
-            reasons.append({"tone": "warn", "icon": "home", "title": "Smaller than average", "detail": f"{typical - listing['surface']:.0f} m² below similar listings for this price"})
-    if quality_features["cheap_for_market"]:
-        reasons.append({"tone": "warn", "icon": "search", "title": "Cheap for the area", "detail": "Expect many other applicants"})
+            notes.append({"tone": "warn", "icon": "home", "title": "Smaller than average", "detail": f"{typical - listing['surface']:.0f} m² below similar listings for this price"})
 
     tags = [f"{minutes} min to {destination_name.split(' (')[0]}"] if minutes is not None else []
     tags += [label for flag, label in (("is_furnished", "Furnished"), ("is_temporary", "Temporary")) if listing.get(flag)]
@@ -137,14 +189,16 @@ def card(listing: dict, profile: dict, market: dict, quality_model: QualityModel
         "price": price,
         "rent": f"CHF {price:,.0f}".replace(",", "’"),
         "meta": " · ".join(part for part in (_surface_label(listing), _rooms_label(listing)) if part),
-        "match": max(1, min(99, match)),
+        "replyLevel": level,
+        "replyLabel": level_label,
+        "replyScore": round(quality, 4),  # for ordering only; the app never shows it
         "risk": max(1, min(99, risk)),
-        "quality": round(100 * quality),
         "commuteMinutes": minutes,
         "language": language,
         "movingDate": listing.get("moving_date"),
         "tags": tags[:3],
-        "reasons": reasons[:5],
+        "reasons": reasons,  # all of them, so the shares add up to 100
+        "notes": notes[:5],
         **risk_explanation(listing),
         "modelVersion": {"risk": listing.get("model_version"), "quality": quality_model.version},
     }
@@ -186,13 +240,13 @@ def _surface_label(listing: dict) -> str:
 
 
 SORTS = {
-    "match": lambda c: (-c["match"], c["risk"]),
-    "price_asc": lambda c: (c["price"], -c["match"]),
-    "price_desc": lambda c: (-c["price"], -c["match"]),
-    "newest": lambda c: (-(datetime.fromisoformat(c["published"]).timestamp() if c["published"] else 0), -c["match"]),
-    "risk": lambda c: (c["risk"], -c["match"]),
-    "commute": lambda c: (c["commuteMinutes"] if c["commuteMinutes"] is not None else 999, -c["match"]),
-    "size": lambda c: (-(c["surface"] or 0), -c["match"]),
+    "reply": lambda c: (-c["replyScore"], c["risk"]),
+    "price_asc": lambda c: (c["price"], -c["replyScore"]),
+    "price_desc": lambda c: (-c["price"], -c["replyScore"]),
+    "newest": lambda c: (-(datetime.fromisoformat(c["published"]).timestamp() if c["published"] else 0), -c["replyScore"]),
+    "risk": lambda c: (c["risk"], -c["replyScore"]),
+    "commute": lambda c: (c["commuteMinutes"] if c["commuteMinutes"] is not None else 999, -c["replyScore"]),
+    "size": lambda c: (-(c["surface"] or 0), -c["replyScore"]),
 }
 
 
@@ -237,9 +291,9 @@ def search(listings: list[dict], profile: dict, market: dict, filters: dict, sor
     for c in cards:
         if passes(c, filters, ignore_source=True):
             source_counts[c["source"]] = source_counts.get(c["source"], 0) + 1
-    selected = sorted((c for c in cards if passes(c, filters)), key=SORTS.get(sort, SORTS["match"]))
+    selected = sorted((c for c in cards if passes(c, filters)), key=SORTS.get(sort, SORTS["reply"]))
     return {"total": len(selected), "listings": selected[offset:offset + limit], "sourceCounts": source_counts}
 
 
 def rank(listings: list[dict], profile: dict, market: dict) -> list[dict]:
-    return search(listings, profile, market, {}, "match", 0, len(listings))["listings"]
+    return search(listings, profile, market, {}, "reply", 0, len(listings))["listings"]
