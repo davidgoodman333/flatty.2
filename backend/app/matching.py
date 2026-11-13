@@ -8,6 +8,7 @@ The risk score is shown separately and never removes a listing; the UI warns ins
 import re
 from datetime import datetime
 
+from . import llm
 from .geo import commute_minutes, distance_km, neighbourhood, resolve_destination
 from .kinds import APARTMENT, HOUSE, ROOM, STUDIO, classify
 from .ml.features import is_shared
@@ -108,6 +109,12 @@ def card(listing: dict, profile: dict, market: dict, quality_model: QualityModel
     tags += [label for flag, label in (("is_furnished", "Furnished"), ("is_temporary", "Temporary")) if listing.get(flag)]
     tags.append("Private landlord" if listing.get("is_private") else (listing.get("agency") or "Agency"))
 
+    original_title = listing.get("title") or _type_label(listing)
+    title_en = listing.get("title_en")
+    if not title_en and original_title:
+        title_en = llm.translate_title(original_title)
+        listing["title_en"] = title_en
+
     features = list(listing.get("attributes") or [])
     if listing.get("is_furnished"):
         features.insert(0, "Furnished")
@@ -133,7 +140,8 @@ def card(listing: dict, profile: dict, market: dict, quality_model: QualityModel
         "lng": listing.get("lng"),
         "area": area,
         "city": listing.get("city"),
-        "title": listing.get("title") or _type_label(listing),
+        "title": title_en or original_title,
+        "originalTitle": original_title,
         "price": price,
         "rent": f"CHF {price:,.0f}".replace(",", "’"),
         "meta": " · ".join(part for part in (_surface_label(listing), _rooms_label(listing)) if part),

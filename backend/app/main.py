@@ -87,9 +87,13 @@ class CheckRequest(BaseModel):
 
 
 class GenerateRequest(BaseModel):
-    kind: str = Field(pattern="^(email|summary)$")
+    kind: str = Field(pattern="^(email|summary|title)$")
     listing: dict
     profile: Profile
+
+
+class TranslateTitleRequest(BaseModel):
+    title: str
 
 
 def _load() -> tuple[list[dict], dict, dict | None]:
@@ -269,6 +273,17 @@ def generate(request: GenerateRequest):
         if stored and not stored.get("active", True):
             raise HTTPException(status_code=410, detail={"code": "listing_inactive", "message": "This listing is no longer online, so Flatty won't draft an application for it."})
     return llm.generate(request.kind, request.listing, request.profile.model_dump())
+
+
+@app.post("/api/translate-title")
+def translate_title(request: TranslateTitleRequest):
+    original = request.title
+    translated = llm.translate_title(original)
+    return {
+        "title": translated,
+        "originalTitle": original,
+        "engine": llm.OLLAMA_MODEL if llm.available() else "template",
+    }
 
 
 @app.post("/api/scrape", status_code=202)

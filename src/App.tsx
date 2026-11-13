@@ -872,6 +872,11 @@ export default function App() {
                     <div className="apartment-info">
                       <span className="area-label"><Icon name="map" size={13} /> {apartment.area}<em>· {apartment.sourceName}</em></span>
                       <h2>{apartment.title}</h2>
+                      {apartment.originalTitle && apartment.originalTitle.toLowerCase() !== apartment.title.toLowerCase() && (
+                        <span className="original-title-badge" title={`Original title: ${apartment.originalTitle}`}>
+                          Original: {apartment.originalTitle}
+                        </span>
+                      )}
                       <p>{apartment.meta}</p>
                       <div className="mini-tags">{apartment.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
                     </div>
@@ -939,6 +944,9 @@ export default function App() {
               <div className="score-box"><strong>{selectedApartment.match}</strong><span>%</span></div>
               <h1>{matchHeadline(selectedApartment.match)}</h1>
               <p>{selectedApartment.title}<br />{selectedApartment.area} · {selectedApartment.rent}</p>
+              {selectedApartment.originalTitle && selectedApartment.originalTitle.toLowerCase() !== selectedApartment.title.toLowerCase() && (
+                <small className="original-title-label">Original German title: “{selectedApartment.originalTitle}”</small>
+              )}
               {selectedApartment.url && (
                 <a className="source-link" href={selectedApartment.url} rel="noreferrer" target="_blank">
                   View the original listing on {selectedApartment.sourceName === "Pasted listing" ? "the website" : selectedApartment.sourceName} ↗
@@ -981,6 +989,9 @@ export default function App() {
               <dl>
                 <div><dt>Rent</dt><dd>{selectedApartment.rent} / month{selectedApartment.rentNet && selectedApartment.rentCharges ? ` (${formatChf(selectedApartment.rentNet)} + ${formatChf(selectedApartment.rentCharges)} charges)` : ""}</dd></div>
                 <div><dt>Type</dt><dd>{KIND_DESCRIPTIONS[selectedApartment.kind] ?? selectedApartment.kind}</dd></div>
+                {selectedApartment.originalTitle && selectedApartment.originalTitle.toLowerCase() !== selectedApartment.title.toLowerCase() && (
+                  <div><dt>Original title</dt><dd>{selectedApartment.originalTitle}</dd></div>
+                )}
                 {selectedApartment.rooms && selectedApartment.kind !== "Room" ? <div><dt>Rooms</dt><dd>{selectedApartment.rooms}</dd></div> : null}
                 {selectedApartment.surface ? <div><dt>Size</dt><dd>{selectedApartment.surface} m²</dd></div> : null}
                 {selectedApartment.floor !== null && selectedApartment.floor !== undefined ? <div><dt>Floor</dt><dd>{selectedApartment.floor === 0 ? "Ground floor" : selectedApartment.floor}</dd></div> : null}

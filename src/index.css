@@ -207,6 +207,8 @@ h1, h2, p { margin: 0; }
 .pixel-windows i { height: 18px; background: #e55242; }
 .area-label { display: flex; align-items: center; gap: 5px; color: #7a6267; font-family: "Space Mono"; font-size: 12px; text-transform: uppercase; }
 .apartment-info h2 { margin-top: 7px; font-size: 21px; letter-spacing: -.025em; }
+.original-title-badge { display: inline-block; margin-top: 3px; color: #8e7b7f; font-size: 12px; font-style: italic; }
+.original-title-label { display: block; margin-top: 6px; color: #ffeb9a; font-size: 13px; font-style: italic; }
 .apartment-info > p { margin-top: 5px; color: #88777a; font-size: 14px; }
 .mini-tags { display: flex; gap: 7px; margin-top: 14px; }
 .mini-tags span { padding: 5px 7px; background: #fff0ed; color: #8d5656; font-size: 12px; }

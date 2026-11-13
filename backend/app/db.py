@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS listings (
     source_id     TEXT NOT NULL,
     url           TEXT NOT NULL,
     title         TEXT,
+    title_en      TEXT,
     description   TEXT,
     price         REAL,
     rooms         REAL,
@@ -57,7 +58,7 @@ CREATE TABLE IF NOT EXISTS scrape_runs (
 """
 
 LISTING_FIELDS = [
-    "id", "source", "source_id", "url", "title", "description", "price", "rooms", "surface",
+    "id", "source", "source_id", "url", "title", "title_en", "description", "price", "rooms", "surface",
     "category", "object_type", "zipcode", "city", "address", "lat", "lng", "is_private",
     "is_furnished", "is_temporary", "moving_date", "agency", "published",
     "rent_net", "rent_charges", "floor", "year_built", "year_renovated", "available_text",
@@ -67,6 +68,7 @@ JSON_FIELDS = ("attributes", "images")
 
 # Columns added after the first release; created on existing databases automatically.
 MIGRATIONS = {
+    "title_en": "TEXT",
     "rent_net": "REAL", "rent_charges": "REAL", "floor": "INTEGER", "year_built": "INTEGER",
     "year_renovated": "INTEGER", "available_text": "TEXT", "attributes": "TEXT", "images": "TEXT",
     "risk_details": "TEXT",
@@ -164,6 +166,10 @@ def mark_inactive(conn: sqlite3.Connection, listing_id: str) -> None:
 
 def mark_checked(conn: sqlite3.Connection, listing_id: str) -> None:
     conn.execute("UPDATE listings SET last_checked=? WHERE id=?", (now_iso(), listing_id))
+
+
+def update_title_en(conn: sqlite3.Connection, listing_id: str, title_en: str) -> None:
+    conn.execute("UPDATE listings SET title_en=? WHERE id=?", (title_en, listing_id))
 
 
 def delete_stale(conn: sqlite3.Connection) -> int:

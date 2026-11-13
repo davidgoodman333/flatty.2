@@ -16,6 +16,7 @@ export type Apartment = {
   area: string;
   city?: string;
   title: string;
+  originalTitle?: string;
   price: number;
   rent: string;
   meta: string;
@@ -178,9 +179,17 @@ export async function generateText(kind: "email" | "summary", listing: Apartment
   return post<{ text: string; engine: string }>("/generate", { kind, listing, profile });
 }
 
+export async function translateTitle(title: string): Promise<{ title: string; originalTitle: string; engine: string }> {
+  try {
+    return await post<{ title: string; originalTitle: string; engine: string }>("/translate-title", { title });
+  } catch {
+    return { title, originalTitle: title, engine: "template" };
+  }
+}
+
 export const demoApartments: Apartment[] = [
   {
-    id: "demo:1", source: "demo", sourceName: "Demo", kind: "Apartment", features: ["Balcony or garden"], images: [], url: "", area: "Breitenrain", title: "Bright 2.5-room apartment", price: 1720, rent: "CHF 1,720",
+    id: "demo:1", source: "demo", sourceName: "Demo", kind: "Apartment", features: ["Balcony or garden"], images: [], url: "", area: "Breitenrain", title: "Bright 2.5-room apartment", originalTitle: "Helle 2.5-Zimmer-Wohnung im Breitenrain", price: 1720, rent: "CHF 1,720",
     meta: "58 m² · 2.5 rooms", match: 92, risk: 8, tags: ["7 min to uni", "Tram nearby"], riskFlags: [],
     reasons: [
       { tone: "yes", icon: "check", title: "Within your budget", detail: "CHF 80 below your maximum" },
@@ -190,7 +199,7 @@ export const demoApartments: Apartment[] = [
     ],
   },
   {
-    id: "demo:2", source: "demo", sourceName: "Demo", kind: "Apartment", features: [], images: [], url: "", area: "Länggasse", title: "Quiet apartment near Uni Bern", price: 1890, rent: "CHF 1,890",
+    id: "demo:2", source: "demo", sourceName: "Demo", kind: "Apartment", features: [], images: [], url: "", area: "Länggasse", title: "Quiet apartment near Uni Bern", originalTitle: "Ruhige Wohnung nahe Uni Bern", price: 1890, rent: "CHF 1,890",
     meta: "64 m² · 3 rooms", match: 86, risk: 27, tags: ["4 min to uni", "Shops nearby"], riskFlags: ["Pushes contact off the platform (WhatsApp, private e-mail)"],
     reasons: [
       { tone: "warn", icon: "check", title: "Slightly over budget", detail: "CHF 90 above your maximum" },
@@ -198,7 +207,7 @@ export const demoApartments: Apartment[] = [
     ],
   },
   {
-    id: "demo:3", source: "demo", sourceName: "Demo", kind: "Apartment", features: [], images: [], url: "", area: "Mattenhof", title: "Renovated city apartment", price: 1650, rent: "CHF 1,650",
+    id: "demo:3", source: "demo", sourceName: "Demo", kind: "Apartment", features: [], images: [], url: "", area: "Mattenhof", title: "Renovated city apartment", originalTitle: "Renovierte Stadtwohnung im Mattenhof", price: 1650, rent: "CHF 1,650",
     meta: "51 m² · 2 rooms", match: 74, risk: 68, tags: ["18 min to uni", "Bus nearby"],
     riskFlags: ["No viewing offered or the owner is abroad", "Asks for a deposit or payment before a viewing"],
     reasons: [
