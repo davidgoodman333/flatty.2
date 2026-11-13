@@ -66,6 +66,10 @@ class Filters(BaseModel):
     rental: str = Field("any", pattern="^(any|permanent|temporary)$")
     withPhotos: bool = False
     availableBy: str | None = None
+    # Area on the map: only listings within radiusKm of this point.
+    areaLat: float | None = Field(None, ge=45.0, le=48.5)
+    areaLng: float | None = Field(None, ge=5.5, le=11.0)
+    radiusKm: float = Field(2.0, gt=0, le=50)
 
 
 class MatchRequest(BaseModel):

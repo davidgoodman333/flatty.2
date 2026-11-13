@@ -30,6 +30,8 @@ export type Apartment = {
   isTemporary?: boolean;
   features: string[];
   images: Photo[];
+  lat?: number | null;
+  lng?: number | null;
   match: number;
   risk: number;
   quality?: number;
@@ -56,11 +58,14 @@ export type Filters = {
   rental: "any" | "permanent" | "temporary";
   withPhotos: boolean;
   availableBy: string | null;
+  areaLat: number | null;
+  areaLng: number | null;
+  radiusKm: number;
 };
 
 export const emptyFilters: Filters = {
   sources: [], priceMin: null, priceMax: null, roomsMin: null, surfaceMin: null, types: [], features: [],
-  maxRisk: null, rental: "any", withPhotos: false, availableBy: null,
+  maxRisk: null, rental: "any", withPhotos: false, availableBy: null, areaLat: null, areaLng: null, radiusKm: 2,
 };
 
 export type SortKey = "match" | "price_asc" | "price_desc" | "newest" | "risk" | "commute" | "size";

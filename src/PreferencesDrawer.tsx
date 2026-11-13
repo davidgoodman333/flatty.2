@@ -57,7 +57,7 @@ export default function PreferencesDrawer({ initial, onApply, onClose, onRestart
         <header className="drawer-head">
           <div>
             <span className="step-code">YOUR SEARCH</span>
-            <h2 id="preferences-title" ref={heading} tabIndex={-1}>Edit preferences</h2>
+            <h2 id="preferences-title" ref={heading} tabIndex={-1}>Edit profile</h2>
           </div>
           <button aria-label="Close without saving" className="drawer-close" onClick={onClose} type="button">
             <Icon name="close" size={20} />

@@ -5,6 +5,7 @@ import {
 } from "./api";
 import Icon from "./Icon";
 import { APARTMENT_TYPES, AREAS, BUDGET_MAX, BUDGET_MIN, COUNTRIES, MAIN_LANGUAGES, OTHER_LANGUAGES, PRIORITIES } from "./options";
+import MapRadius from "./MapRadius";
 import PreferencesDrawer from "./PreferencesDrawer";
 
 const SORT_OPTIONS: [SortKey, string][] = [
@@ -23,6 +24,11 @@ const KIND_DESCRIPTIONS: Record<string, string> = {
   House: "House",
 };
 const FEATURE_FILTERS = ["Furnished", "Balcony or garden", "Pets allowed", "Dishwasher", "Washing machine", "Lift", "Parking", "Wheelchair accessible"];
+const MAIN_FEATURE_COUNT = 3; // Furnished, balcony and pets are shown first; the rest behind "Show more"
+const PRICE_GAP = 100; // smallest distance between the two price handles
+const pricePercent = (value: number) => ((value - BUDGET_MIN) / (BUDGET_MAX - BUDGET_MIN)) * 100;
+// Quick type chips → the five home types used in the preferences.
+const APARTMENT_KINDS = ["Proper flat", "2-person flat", "3-person flat"];
 const ROOM_OPTIONS = [1, 1.5, 2, 2.5, 3, 3.5, 4, 5];
 
 const formatChf = (value: number) => `CHF ${Math.round(value).toLocaleString("de-CH")}`;
@@ -34,9 +40,19 @@ const timeAgo = (value: string) => {
   return `${Math.round(hours / 24)} days ago`;
 };
 const formatDate = (value: string) => new Date(value).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+// Filters inside the "More filters" panel (type, price and must-haves are always visible).
 const countActiveFilters = (filters: Filters) =>
-  [filters.priceMin, filters.priceMax, filters.roomsMin, filters.surfaceMin, filters.maxRisk, filters.availableBy].filter((value) => value !== null).length
-  + filters.types.length + filters.features.length + (filters.rental !== "any" ? 1 : 0) + (filters.withPhotos ? 1 : 0);
+  [filters.roomsMin, filters.surfaceMin, filters.maxRisk, filters.availableBy].filter((value) => value !== null).length
+  + (filters.rental !== "any" ? 1 : 0) + (filters.withPhotos ? 1 : 0) + (filters.sources.length ? 1 : 0);
+// Type and maximum price are preferences, so "Reset filters" leaves them alone.
+const hasAnyFilter = (filters: Filters) =>
+  countActiveFilters(filters) > 0 || filters.priceMin !== null || filters.features.length > 0 || filters.areaLat !== null;
+
+// Match colour: red-orange for weak matches, through amber, to green for strong ones.
+const matchColor = (match: number) => {
+  const strength = Math.min(1, Math.max(0, (match - 40) / 50));
+  return `hsl(${Math.round(8 + strength * 127)} 48% 36%)`;
+};
 
 type Screen = "welcome" | "about" | "onboarding" | "browse" | "result";
 const matchHeadline = (match: number) => {
@@ -91,6 +107,7 @@ export default function App() {
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [sort, setSort] = useState<SortKey>("match");
   const [showFilters, setShowFilters] = useState(false);
+  const [showAllFeatures, setShowAllFeatures] = useState(false);
   const [showBlockedSources, setShowBlockedSources] = useState(false);
   const [sources, setSources] = useState<SourceInfo[]>([]);
   const [sourceCounts, setSourceCounts] = useState<Record<string, number>>({});
@@ -152,7 +169,7 @@ export default function App() {
     else setLoadingListings(true);
     setListingError("");
     try {
-      const result = await matchListings(profile, filters, sort, append ? apartments.length : 0);
+      const result = await matchListings(profile, { ...filters, types: apartmentTypes, priceMax: null }, sort, append ? apartments.length : 0);
       if (request !== listingRequest.current) return; // filters changed meanwhile
       setApartments(append ? [...apartments, ...result.listings] : result.listings);
       setTotalMatches(result.total);
@@ -197,6 +214,17 @@ export default function App() {
     const next = activeSources.includes(key) ? activeSources.filter((item) => item !== key) : [...activeSources, key];
     if (next.length === 0) return; // keep at least one website selected
     updateFilters({ sources: next.length === enabledSources.length ? [] : next });
+  };
+
+  // The type chips edit the same home types as the preferences panel.
+  const typeSelected = (value: string) =>
+    value === "Proper flat" ? apartmentTypes.some((type) => APARTMENT_KINDS.includes(type)) : apartmentTypes.includes(value);
+  const toggleType = (value: string) => {
+    if (value === "Proper flat") {
+      setApartmentTypes(typeSelected(value) ? apartmentTypes.filter((type) => !APARTMENT_KINDS.includes(type)) : [...apartmentTypes, "Proper flat"]);
+    } else {
+      setApartmentTypes(typeSelected(value) ? apartmentTypes.filter((type) => type !== value) : [...apartmentTypes, value]);
+    }
   };
 
   const numberOrNull = (value: string) => (value.trim() === "" ? null : Number(value));
@@ -309,7 +337,7 @@ export default function App() {
           {(screen === "browse" || screen === "result") && <span className="header-pref">{preferenceText}</span>}
           {(screen === "browse" || screen === "result") && (
             <button aria-haspopup="dialog" className="edit-button" onClick={() => setShowPreferences(true)} type="button">
-              Edit preferences
+              Edit profile
             </button>
           )}
           {screen === "about" && (
@@ -668,35 +696,145 @@ export default function App() {
 
           {activeTab === "search" ? (
             <section className="listings">
-              {liveData && enabledSources.length > 0 && (
-                <div className="source-filter">
-                  <span className="filter-label">Websites</span>
-                  <div className="chips">
-                    {enabledSources.map((source) => (
-                      <button
-                        className={activeSources.includes(source.key) ? "chip active" : "chip"}
-                        key={source.key}
-                        onClick={() => toggleSource(source.key)}
-                        type="button"
-                      >
-                        {activeSources.includes(source.key) && <Icon name="check" size={14} />}
-                        {source.name}
-                        <span className="chip-count">{sourceCounts[source.key] ?? 0}</span>
-                      </button>
-                    ))}
+              <div className="filter-box">
+                <div className="quick-filters">
+                  <div className="quick-main">
+                    <div className="filter-group">
+                      <span>Type</span>
+                      <div className="chips">
+                        {TYPE_FILTERS.map(([value, label, hint]) => {
+                          const active = typeSelected(value);
+                          return (
+                            <button aria-pressed={active} className={active ? "chip active" : "chip"} key={value} onClick={() => toggleType(value)} title={hint} type="button">
+                              {active && <Icon name="check" size={14} />}{label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <small className="filter-hint">
+                        {apartmentTypes.length ? "From your preferences. " : "All types shown. "}A studio has its own kitchen and bathroom; rooms share a kitchen.
+                      </small>
+                    </div>
+                    <div className="filter-group quick-price">
+                      <div className="label-row">
+                        <span>Monthly rent</span>
+                        <strong>CHF {(filters.priceMin ?? BUDGET_MIN).toLocaleString("de-CH")} – {budget.toLocaleString("de-CH")}</strong>
+                      </div>
+                      <div className="dual-range" style={{ "--from": `${pricePercent(filters.priceMin ?? BUDGET_MIN)}%`, "--to": `${pricePercent(budget)}%` } as React.CSSProperties}>
+                        <input
+                          aria-label="Minimum rent" max={BUDGET_MAX} min={BUDGET_MIN} step="50" type="range" value={filters.priceMin ?? BUDGET_MIN}
+                          onChange={(event) => {
+                            const value = Math.min(Number(event.target.value), budget - PRICE_GAP);
+                            updateFilters({ priceMin: value <= BUDGET_MIN ? null : value });
+                          }}
+                        />
+                        <input
+                          aria-label="Maximum rent (your budget)" max={BUDGET_MAX} min={BUDGET_MIN} step="50" type="range" value={budget}
+                          onChange={(event) => setBudget(Math.max(Number(event.target.value), (filters.priceMin ?? BUDGET_MIN) + PRICE_GAP))}
+                        />
+                      </div>
+                      <small className="filter-hint">The maximum is your budget. Listings up to 15 % above it are shown with a warning.</small>
+                    </div>
+                    <div className="filter-group">
+                      <span>Must have</span>
+                      <div className="chips">
+                        {FEATURE_FILTERS.filter((feature, index) => showAllFeatures || index < MAIN_FEATURE_COUNT || filters.features.includes(feature)).map((feature) => (
+                          <button aria-pressed={filters.features.includes(feature)} className={filters.features.includes(feature) ? "chip active" : "chip"} key={feature} onClick={() => updateFilters({ features: filters.features.includes(feature) ? filters.features.filter((item) => item !== feature) : [...filters.features, feature] })} type="button">
+                            {filters.features.includes(feature) && <Icon name="check" size={14} />}{feature}
+                          </button>
+                        ))}
+                        <button aria-expanded={showAllFeatures} className="show-more-chips" onClick={() => setShowAllFeatures((value) => !value)} type="button">
+                          {showAllFeatures ? "Show less" : `Show ${FEATURE_FILTERS.slice(MAIN_FEATURE_COUNT).filter((feature) => !filters.features.includes(feature)).length} more`}
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  {blockedSources.length > 0 && (
-                    <button className="info-trigger blocked-toggle" onClick={() => setShowBlockedSources((value) => !value)} type="button">
-                      Why not {blockedSources.slice(0, 3).map((source) => source.name).join(", ")}…?
-                    </button>
-                  )}
-                  {showBlockedSources && (
-                    <ul className="blocked-sources">
-                      {blockedSources.map((source) => <li key={source.key}><strong>{source.name}</strong> {source.decision}</li>)}
-                    </ul>
+                  <MapRadius
+                    area={filters.areaLat !== null && filters.areaLng !== null ? { lat: filters.areaLat, lng: filters.areaLng } : null}
+                    colorFor={matchColor}
+                    listings={apartments}
+                    onAreaChange={(area, radiusKm) => updateFilters({ areaLat: area?.lat ?? null, areaLng: area?.lng ?? null, radiusKm })}
+                    onSelect={checkApartment}
+                    radiusKm={filters.radiusKm}
+                  />
+                </div>
+                {showFilters && (
+                  <div className="filter-panel">
+                    <label className="filter-field">
+                      <span>Rooms from</span>
+                      <select onChange={(event) => updateFilters({ roomsMin: numberOrNull(event.target.value) })} value={filters.roomsMin ?? ""}>
+                        <option value="">Any</option>
+                        {ROOM_OPTIONS.map((rooms) => <option key={rooms} value={rooms}>{rooms}+</option>)}
+                      </select>
+                    </label>
+                    <label className="filter-field">
+                      <span>Size from (m²)</span>
+                      <input inputMode="numeric" min={0} onChange={(event) => updateFilters({ surfaceMin: numberOrNull(event.target.value) })} placeholder="Any" type="number" value={filters.surfaceMin ?? ""} />
+                    </label>
+                    <label className="filter-field">
+                      <span>Scam risk</span>
+                      <select onChange={(event) => updateFilters({ maxRisk: numberOrNull(event.target.value) })} value={filters.maxRisk ?? ""}>
+                        <option value="">Show all (with warnings)</option>
+                        <option value="54">Hide high risk</option>
+                        <option value="24">Low risk only</option>
+                      </select>
+                    </label>
+                    <label className="filter-field">
+                      <span>Rental period</span>
+                      <select onChange={(event) => updateFilters({ rental: event.target.value as Filters["rental"] })} value={filters.rental}>
+                        <option value="any">Any</option>
+                        <option value="permanent">Long-term only</option>
+                        <option value="temporary">Temporary / sublet only</option>
+                      </select>
+                    </label>
+                    <label className="filter-field">
+                      <span>Move in by</span>
+                      <input onChange={(event) => updateFilters({ availableBy: event.target.value || null })} type="date" value={filters.availableBy ?? ""} />
+                    </label>
+                    <label className="filter-check">
+                      <input checked={filters.withPhotos} onChange={(event) => updateFilters({ withPhotos: event.target.checked })} type="checkbox" />
+                      <span>With photos only</span>
+                    </label>
+                    {liveData && enabledSources.length > 0 && (
+                      <div className="filter-group">
+                        <span>Websites</span>
+                        <div className="chips">
+                          {enabledSources.map((source) => (
+                            <button
+                              className={activeSources.includes(source.key) ? "chip active" : "chip"}
+                              key={source.key}
+                              onClick={() => toggleSource(source.key)}
+                              type="button"
+                            >
+                              {activeSources.includes(source.key) && <Icon name="check" size={14} />}
+                              {source.name}
+                              <span className="chip-count">{sourceCounts[source.key] ?? 0}</span>
+                            </button>
+                          ))}
+                        </div>
+                        {blockedSources.length > 0 && (
+                          <button className="info-trigger blocked-toggle" onClick={() => setShowBlockedSources((value) => !value)} type="button">
+                            Why not {blockedSources.slice(0, 3).map((source) => source.name).join(", ")}…?
+                          </button>
+                        )}
+                        {showBlockedSources && (
+                          <ul className="blocked-sources">
+                            {blockedSources.map((source) => <li key={source.key}><strong>{source.name}</strong> {source.decision}</li>)}
+                          </ul>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <div className="filter-box-foot">
+                  <button className={showFilters ? "filter-toggle active" : "filter-toggle"} aria-expanded={showFilters} onClick={() => setShowFilters((value) => !value)} type="button">
+                    More filters{countActiveFilters(filters) > 0 && ` (${countActiveFilters(filters)})`} <span className={showFilters ? "chevron open" : "chevron"}><Icon name="chevron" size={14} /></span>
+                  </button>
+                  {hasAnyFilter(filters) && (
+                    <button className="reset-filters" onClick={() => setFilters(emptyFilters)} type="button">Reset filters</button>
                   )}
                 </div>
-              )}
+              </div>
 
               <div className="filter-line">
                 <span>
@@ -708,84 +846,12 @@ export default function App() {
                   </small>
                 </span>
                 <div className="filter-controls">
-                  <button className={showFilters ? "filter-toggle active" : "filter-toggle"} onClick={() => setShowFilters((value) => !value)} type="button">
-                    Filters{countActiveFilters(filters) > 0 && ` (${countActiveFilters(filters)})`} <Icon name="chevron" size={14} />
-                  </button>
                   <select aria-label="Sort listings" className="sort-select" onChange={(event) => setSort(event.target.value as SortKey)} value={sort}>
                     {SORT_OPTIONS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
                   </select>
                 </div>
               </div>
 
-              {showFilters && (
-                <div className="filter-panel">
-                  <label className="filter-field">
-                    <span>Rent from (CHF)</span>
-                    <input inputMode="numeric" min={0} onChange={(event) => updateFilters({ priceMin: numberOrNull(event.target.value) })} placeholder="0" type="number" value={filters.priceMin ?? ""} />
-                  </label>
-                  <label className="filter-field">
-                    <span>Rent up to (CHF)</span>
-                    <input inputMode="numeric" min={0} onChange={(event) => updateFilters({ priceMax: numberOrNull(event.target.value) })} placeholder={`${Math.round(budget * 1.15)}`} type="number" value={filters.priceMax ?? ""} />
-                  </label>
-                  <label className="filter-field">
-                    <span>Rooms from</span>
-                    <select onChange={(event) => updateFilters({ roomsMin: numberOrNull(event.target.value) })} value={filters.roomsMin ?? ""}>
-                      <option value="">Any</option>
-                      {ROOM_OPTIONS.map((rooms) => <option key={rooms} value={rooms}>{rooms}+</option>)}
-                    </select>
-                  </label>
-                  <label className="filter-field">
-                    <span>Size from (m²)</span>
-                    <input inputMode="numeric" min={0} onChange={(event) => updateFilters({ surfaceMin: numberOrNull(event.target.value) })} placeholder="Any" type="number" value={filters.surfaceMin ?? ""} />
-                  </label>
-                  <label className="filter-field">
-                    <span>Scam risk</span>
-                    <select onChange={(event) => updateFilters({ maxRisk: numberOrNull(event.target.value) })} value={filters.maxRisk ?? ""}>
-                      <option value="">Show all (with warnings)</option>
-                      <option value="54">Hide high risk</option>
-                      <option value="24">Low risk only</option>
-                    </select>
-                  </label>
-                  <label className="filter-field">
-                    <span>Rental period</span>
-                    <select onChange={(event) => updateFilters({ rental: event.target.value as Filters["rental"] })} value={filters.rental}>
-                      <option value="any">Any</option>
-                      <option value="permanent">Long-term only</option>
-                      <option value="temporary">Temporary / sublet only</option>
-                    </select>
-                  </label>
-                  <label className="filter-field">
-                    <span>Move in by</span>
-                    <input onChange={(event) => updateFilters({ availableBy: event.target.value || null })} type="date" value={filters.availableBy ?? ""} />
-                  </label>
-                  <label className="filter-check">
-                    <input checked={filters.withPhotos} onChange={(event) => updateFilters({ withPhotos: event.target.checked })} type="checkbox" />
-                    <span>With photos only</span>
-                  </label>
-                  <div className="filter-group">
-                    <span>Type</span>
-                    <div className="chips">
-                      {TYPE_FILTERS.map(([value, label, hint]) => (
-                        <button className={filters.types.includes(value) ? "chip active" : "chip"} key={value} title={hint} onClick={() => updateFilters({ types: filters.types.includes(value) ? filters.types.filter((item) => item !== value) : [...filters.types, value] })} type="button">
-                          {filters.types.includes(value) && <Icon name="check" size={14} />}{label}
-                        </button>
-                      ))}
-                    </div>
-                    <small className="filter-hint">A studio has its own kitchen and bathroom. Rooms share a kitchen with a flat or residence.</small>
-                  </div>
-                  <div className="filter-group">
-                    <span>Must have</span>
-                    <div className="chips">
-                      {FEATURE_FILTERS.map((feature) => (
-                        <button className={filters.features.includes(feature) ? "chip active" : "chip"} key={feature} onClick={() => updateFilters({ features: filters.features.includes(feature) ? filters.features.filter((item) => item !== feature) : [...filters.features, feature] })} type="button">
-                          {filters.features.includes(feature) && <Icon name="check" size={14} />}{feature}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <button className="reset-filters" onClick={() => setFilters({ ...emptyFilters, sources: filters.sources })} type="button">Reset filters</button>
-                </div>
-              )}
 
               {listingError && <p className="list-message">{listingError}</p>}
               {!loadingListings && !listingError && apartments.length === 0 && (
@@ -800,7 +866,7 @@ export default function App() {
                       ) : (
                         <div className="pixel-windows"><i /><i /><i /><i /></div>
                       )}
-                      <span className="match-badge">{apartment.match}% match</span>
+                      <span className="match-badge" style={{ background: matchColor(apartment.match) }}>{apartment.match}% match</span>
                       <span className={`risk-badge ${riskLevel(apartment.risk).tone}`}>{apartment.risk}% risk</span>
                     </div>
                     <div className="apartment-info">
@@ -867,7 +933,7 @@ export default function App() {
           <section className="result-layout">
             <div
               className="score-panel"
-              style={{ "--match": `${selectedApartment.match}%` } as React.CSSProperties}
+              style={{ "--match": `${selectedApartment.match}%`, "--match-color": matchColor(selectedApartment.match) } as React.CSSProperties}
             >
               <span className="step-code">COMPATIBILITY</span>
               <div className="score-box"><strong>{selectedApartment.match}</strong><span>%</span></div>

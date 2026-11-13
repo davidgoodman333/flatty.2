@@ -8,7 +8,7 @@ The risk score is shown separately and never removes a listing; the UI warns ins
 import re
 from datetime import datetime
 
-from .geo import commute_minutes, neighbourhood, resolve_destination
+from .geo import commute_minutes, distance_km, neighbourhood, resolve_destination
 from .kinds import APARTMENT, HOUSE, ROOM, STUDIO, classify
 from .ml.features import is_shared
 from .ml.models import QualityModel
@@ -129,6 +129,8 @@ def card(listing: dict, profile: dict, market: dict, quality_model: QualityModel
         "isTemporary": bool(listing.get("is_temporary")),
         "features": features,
         "images": listing.get("images") or [],
+        "lat": listing.get("lat"),
+        "lng": listing.get("lng"),
         "area": area,
         "city": listing.get("city"),
         "title": listing.get("title") or _type_label(listing),
@@ -218,6 +220,11 @@ def passes(c: dict, filters: dict, ignore_source: bool = False) -> bool:
         return False
     if filters.get("availableBy") and c["movingDate"] and c["movingDate"] > filters["availableBy"]:
         return False
+    if filters.get("areaLat") is not None and filters.get("areaLng") is not None:
+        if c["lat"] is None or c["lng"] is None:
+            return False  # location unknown, so it can't be shown as inside the area
+        if distance_km((c["lat"], c["lng"]), (filters["areaLat"], filters["areaLng"])) > filters.get("radiusKm", 2.0):
+            return False
     return True
 
 
