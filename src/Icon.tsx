@@ -1,4 +1,4 @@
-export type IconName = "arrow" | "back" | "check" | "chevron" | "close" | "home" | "link" | "mail" | "map" | "search" | "shop" | "train" | "work";
+export type IconName = "arrow" | "back" | "check" | "chevron" | "close" | "heart" | "home" | "link" | "mail" | "map" | "search" | "shop" | "train" | "work";
 
 export default function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, React.ReactNode> = {
@@ -7,6 +7,7 @@ export default function Icon({ name, size = 18 }: { name: IconName; size?: numbe
     check: <path d="m5 12 4 4L19 6" />,
     chevron: <path d="m8 10 4 4 4-4" />,
     close: <path d="M6 6l12 12M18 6 6 18" />,
+    heart: <path d="M12 20.5 4.6 13a4.9 4.9 0 0 1 0-6.9 4.8 4.8 0 0 1 6.8 0l.6.6.6-.6a4.8 4.8 0 0 1 6.8 0 4.9 4.9 0 0 1 0 6.9L12 20.5Z" />,
     home: <path d="m3 11 9-8 9 8M5.5 9.5V21h13V9.5M9 21v-7h6v7" />,
     link: <path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2" />,
     mail: <><rect x="3" y="5" width="18" height="14" rx="1" /><path d="m4 7 8 6 8-6" /></>,

@@ -37,6 +37,8 @@ react(),
       // Flatty back-end (backend/, FastAPI). Without it the app falls back to demo data.
       proxy: {
         '/api': process.env.FLATTY_API_URL || 'http://127.0.0.1:8000',
+        // The developer password page (backend/app/site_gate.py), so the gate works in development too.
+        '/__gate': process.env.FLATTY_API_URL || 'http://127.0.0.1:8000',
       },
       watch: {
         ignored: [

@@ -2,6 +2,8 @@
 
 import re
 
+from .rules import REPLY, RISK, pattern
+
 STOPWORDS = {
     "German": {"und", "die", "der", "das", "mit", "ist", "wir", "sie", "für", "eine", "zimmer", "wohnung", "nicht", "auf", "im"},
     "English": {"the", "and", "with", "is", "for", "you", "room", "flat", "apartment", "are", "this", "we", "in", "to"},
@@ -9,46 +11,10 @@ STOPWORDS = {
     "Italian": {"il", "che", "con", "per", "una", "appartamento", "sono", "della", "nel", "gli", "camera"},
 }
 
-# Each red flag: (key, user-facing explanation, pattern). Patterns are deliberately
-# simple and multilingual; the classifier learns how much each one matters.
-RED_FLAGS = [
-    (
-        "deposit_before_viewing",
-        "Asks for a deposit or payment before a viewing",
-        r"(kaution|depot|deposit|caution|anzahlung|vorauszahlung|vorkasse|first month).{0,100}"
-        r"(vor der besichtigung|vorab|im voraus|in advance|before (the )?(viewing|visit|keys)|avant (la )?visite|überweis|transfer|virement)",
-    ),
-    (
-        "no_viewing",
-        "No viewing offered or the owner is abroad",
-        r"(keine besichtigung|besichtigung (ist )?nicht möglich|no viewings?|cannot show|can't show|not possible to visit|"
-        r"(bin|wohne|lebe|befinde mich|arbeite) (zurzeit |derzeit |momentan |beruflich )?im ausland\b|i am (currently )?(abroad|overseas|in (the )?uk|in london)|"
-        r"je (suis|vis|travaille) .{0,25}(à|a) l['’ ]?étranger|können (wir|ich) (leider )?nicht nach bern kommen|"
-        r"schlüssel (werden |wird )?(per post|per kurier|zugeschickt|versendet)|keys? (will be )?(sent|mailed|posted|shipped)|clés .{0,30}(envoyées|par la poste))",
-    ),
-    (
-        "off_platform_contact",
-        "Pushes contact off the platform (WhatsApp, private e-mail)",
-        r"(whatsapp|telegram|signal app|@gmail\.|@hotmail\.|@yahoo\.|@outlook\.|@gmx\.|contact me (directly )?(at|by|via)|"
-        r"schreiben sie mir (direkt )?(an|per|auf)|kontaktieren sie mich (direkt )?(per|unter|über)|écrivez-moi)",
-    ),
-    (
-        "payment_service",
-        "Mentions a risky payment channel",
-        r"(western union|moneygram|bitcoin|crypto|paysafe|gift ?card|airbnb.{0,40}(zahlung|payment|paiement|kaution|deposit)|"
-        r"(zahlung|payment|paiement|kaution|caution|deposit|dépôt).{0,40}airbnb|treuhand.{0,30}(agentur|service)|escrow)",
-    ),
-    (
-        "urgency",
-        "Creates time pressure",
-        r"(sehr dringend|first come,? first served|nur heute|only today|act fast|schnell entscheiden|sofort überweisen|urgent)",
-    ),
-]
+# Each red flag: (key, user-facing explanation, pattern), from rules.toml [[risk.red_flags]].
+RED_FLAGS = [(flag["key"], flag["label"], pattern(flag["patterns"])) for flag in RISK["red_flags"]]
 
-STUDENT_PATTERN = re.compile(
-    r"(student|studierend|studentin|studenten|étudiant|studente|uni(versität|versity)?\b|wg[- ]tauglich|azubi|praktikant|intern)",
-    re.IGNORECASE,
-)
+STUDENT_PATTERN = re.compile(pattern(REPLY["students_pattern"]["patterns"]), re.IGNORECASE)
 
 
 def detect_language(text: str) -> str:

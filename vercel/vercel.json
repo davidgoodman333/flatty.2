@@ -1,0 +1,6 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "https://davids-macbook-pro.tail78dd58.ts.net/$1" }
+  ]
+}

@@ -1,4 +1,5 @@
 .venv/
+site_password.txt
 __pycache__/
 data/flatty.db*
 models/*.joblib

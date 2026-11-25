@@ -12,10 +12,12 @@ type Props = {
   listings: Apartment[];
   onSelect: (apartment: Apartment) => void;
   colorFor: (apartment: Apartment) => string;
+  /** Place offered as a quick centre for the area, e.g. the student's campus. */
+  centre?: Area & { name: string };
 };
 
 const BERN: L.LatLngExpression = [46.948, 7.4474];
-const UNI_BERN: Area = { lat: 46.9505, lng: 7.4381 };
+const UNI_BERN = { name: "Uni Bern", lat: 46.9506, lng: 7.4385 };
 const RADIUS_MIN = 0.5;
 const RADIUS_MAX = 10;
 
@@ -23,7 +25,7 @@ const pinIcon = L.divIcon({ className: "map-pin-icon", html: "<span></span>", ic
 
 // Map of Bern: click to set the centre of the search area, drag the pin to move it, and set the
 // radius below. The dots are the listings currently loaded in the list.
-export default function MapRadius({ area, radiusKm, onAreaChange, listings, onSelect, colorFor }: Props) {
+export default function MapRadius({ area, radiusKm, onAreaChange, listings, onSelect, colorFor, centre = UNI_BERN }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
   const areaLayer = useRef<L.LayerGroup | null>(null);
@@ -103,7 +105,7 @@ export default function MapRadius({ area, radiusKm, onAreaChange, listings, onSe
       />
       <small className="filter-hint">
         {area ? "Drag the pin to move the area. " : "Click the map to set the centre. "}
-        <button className="map-link" onClick={() => onAreaChange(UNI_BERN, radiusKm)} type="button">Centre on Uni Bern</button>
+        <button className="map-link" onClick={() => onAreaChange({ lat: centre.lat, lng: centre.lng }, radiusKm)} type="button">Centre on {centre.name}</button>
       </small>
     </div>
   );

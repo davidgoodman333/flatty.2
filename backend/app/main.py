@@ -3,16 +3,19 @@
     uvicorn app.main:app --reload --port 8000
 """
 
+import hashlib
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db, llm, refresher
-from .config import RECHECK_MINUTES
+from . import accounts, db, llm, llm_worker, refresher, site_gate, wishes
+from .config import RECHECK_MINUTES, STATIC_DIR
 from .matching import card, search
 from .ml.features import market_stats
 from .ml.models import QualityModel
@@ -26,7 +29,9 @@ from .text import listing_from_text
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     refresher.start()  # daily automatic refresh (FLATTY_AUTO_REFRESH=0 turns it off)
+    llm_worker.start()  # landlord wishes and English titles from the local LLM, in the background
     yield
+    llm_worker.stop()
     refresher.stop()
 
 
@@ -37,9 +42,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Developer password in front of everything (pages, API, files) when FLATTY_SITE_PASSWORD is set.
+# Added last, so it runs first.
+if site_gate.ENABLED:
+    app.add_middleware(site_gate.SiteGate)
+app.include_router(accounts.router)
+# During a private test (see config.PRIVATE) these endpoints need a log-in.
+GUARDED = [Depends(accounts.guard)]
+SORT_PATTERN = "^(reply|price_asc|price_desc|newest|risk|commute|size)$"
+MAX_SAVED = 200  # saved homes per account
+MAX_SNAPSHOT_BYTES = 40_000
 
 
 class Profile(BaseModel):
+    name: str = ""  # only used to sign application e-mails
     languages: list[str] = ["English"]
     budget: float = 1800
     areas: list[str] = []
@@ -65,7 +81,8 @@ class Filters(BaseModel):
     maxRisk: int | None = None
     rental: str = Field("any", pattern="^(any|permanent|temporary)$")
     withPhotos: bool = False
-    availableBy: str | None = None
+    availableBy: str | None = None  # the student needs the home from this date
+    neededUntil: str | None = None  # ... until this date (empty = open-ended)
     # Area on the map: only listings within radiusKm of this point.
     areaLat: float | None = Field(None, ge=45.0, le=48.5)
     areaLng: float | None = Field(None, ge=5.5, le=11.0)
@@ -75,7 +92,7 @@ class Filters(BaseModel):
 class MatchRequest(BaseModel):
     profile: Profile
     filters: Filters = Filters()
-    sort: str = Field("reply", pattern="^(reply|price_asc|price_desc|newest|risk|commute|size)$")
+    sort: str = Field("reply", pattern=SORT_PATTERN)
     offset: int = Field(0, ge=0)
     limit: int = Field(30, ge=1, le=200)
 
@@ -90,10 +107,21 @@ class GenerateRequest(BaseModel):
     kind: str = Field(pattern="^(email|summary|title)$")
     listing: dict
     profile: Profile
+    language: str | None = Field(None, pattern="^(English|German)$")  # e-mails only
 
 
 class TranslateTitleRequest(BaseModel):
     title: str
+
+
+class PreferencesRequest(BaseModel):
+    profile: Profile
+    filters: Filters = Filters()
+    sort: str = Field("reply", pattern=SORT_PATTERN)
+
+
+class SaveRequest(BaseModel):
+    listing: dict
 
 
 def _load() -> tuple[list[dict], dict, dict | None]:
@@ -115,17 +143,19 @@ def health():
         "riskModel": risk_version,
         "qualityModel": QualityModel().version,
         "llm": {"model": llm.OLLAMA_MODEL, "available": llm.available()},
+        # Listings whose landlord wishes the LLM hasn't read yet (None until the worker's first round).
+        "wishesPending": llm_worker.state["wishes_pending"],
     }
 
 
-@app.get("/api/sources")
+@app.get("/api/sources", dependencies=GUARDED)
 def sources():
     with db.connect() as conn:
         counts = dict(conn.execute("SELECT source, COUNT(*) FROM listings GROUP BY source").fetchall())
     return [{**source.public(), "listings": counts.get(source.key, 0)} for source in SOURCES if source.key != "other"]
 
 
-@app.post("/api/match")
+@app.post("/api/match", dependencies=GUARDED)
 def match(request: MatchRequest):
     listings, market, last_run = _load()
     result = search(
@@ -144,7 +174,7 @@ def _gone(source_name: str) -> dict:
     }
 
 
-@app.get("/api/listings/{listing_id:path}/check")
+@app.get("/api/listings/{listing_id:path}/check", dependencies=GUARDED)
 def check_listing(listing_id: str):
     """Is this listing still online at its source? Checked with one request, at most once an hour."""
     with db.connect() as conn:
@@ -206,13 +236,15 @@ def _blocked(code: str, message: str, source: str):
     raise HTTPException(status_code=451, detail={"code": code, "message": message, "source": source})
 
 
-@app.post("/api/check-link")
+@app.post("/api/check-link", dependencies=GUARDED)
 def check_link(request: CheckRequest):
     profile = request.profile.model_dump()
     stored, market, _ = _load()
 
     if request.text and request.text.strip():
-        listing = {**listing_from_text(request.text), "id": "pasted:text", "source": "pasted", "url": ""}
+        # The id comes from the text, so two pasted listings can be saved side by side.
+        digest = hashlib.sha256(request.text.strip().encode()).hexdigest()[:16]
+        listing = {**listing_from_text(request.text), "id": f"pasted:{digest}", "source": "pasted", "url": ""}
     elif request.url and request.url.strip():
         url = request.url.strip()
         if not url.startswith(("http://", "https://")):
@@ -261,10 +293,12 @@ def check_link(request: CheckRequest):
 
     [result], version = assess([listing], market, context=stored + [listing])
     listing.update(risk_score=result["score"], risk_details=result, model_version=version)
+    # One listing: worth a few seconds to read who the landlord is looking for. None if Ollama is off.
+    listing["wishes"] = wishes.extract(listing) if llm.available() else None
     return {"listing": card(listing, profile, market, QualityModel(), enforce_budget=False)}
 
 
-@app.post("/api/generate")
+@app.post("/api/generate", dependencies=GUARDED)
 def generate(request: GenerateRequest):
     listing_id = request.listing.get("id")
     if listing_id:
@@ -272,10 +306,10 @@ def generate(request: GenerateRequest):
             stored = db.get_listing(conn, listing_id)
         if stored and not stored.get("active", True):
             raise HTTPException(status_code=410, detail={"code": "listing_inactive", "message": "This listing is no longer online, so Flatty won't draft an application for it."})
-    return llm.generate(request.kind, request.listing, request.profile.model_dump())
+    return llm.generate(request.kind, request.listing, request.profile.model_dump(), request.language)
 
 
-@app.post("/api/translate-title")
+@app.post("/api/translate-title", dependencies=GUARDED)
 def translate_title(request: TranslateTitleRequest):
     original = request.title
     translated = llm.translate_title(original)
@@ -286,10 +320,73 @@ def translate_title(request: TranslateTitleRequest):
     }
 
 
-@app.post("/api/scrape", status_code=202)
+@app.post("/api/scrape", status_code=202, dependencies=GUARDED)
 def scrape():
     """Start one polite scraper run in the background (local admin use)."""
     if refresher.state["running"]:
         raise HTTPException(status_code=409, detail={"code": "busy", "message": "A scraper run is already in progress."})
     refresher.start_in_background()
     return {"started": True}
+
+
+@app.put("/api/account/preferences")
+def save_preferences(request: PreferencesRequest, user: dict = Depends(accounts.require_user)):
+    """Remembers the search profile, filters and sort order of the logged-in student."""
+    with db.connect() as conn:
+        db.save_preferences(conn, user["id"], request.profile.model_dump(), request.filters.model_dump(), request.sort)
+    return {"ok": True}
+
+
+@app.get("/api/saved")
+def saved(user: dict = Depends(accounts.require_user)):
+    """The student's saved homes, newest first, scored for their current profile.
+
+    A home that is still in the database gets a fresh card (`available` says whether it is
+    still online). A pasted listing is shown as it was when it was saved.
+    """
+    profile = Profile(**(user["profile"] or {})).model_dump()
+    with db.connect() as conn:
+        rows = db.saved_rows(conn, user["id"])
+        stored = {row["listing_id"]: db.get_listing(conn, row["listing_id"]) for row in rows}
+        market = market_stats(db.all_listings(conn)) if any(stored.values()) else {}
+    model = QualityModel()
+    items = []
+    for row in rows:
+        listing = stored[row["listing_id"]]
+        if listing:
+            item = {"listing": card(listing, profile, market, model, enforce_budget=False), "available": bool(listing.get("active", True))}
+        elif row["snapshot"]:
+            item = {"listing": row["snapshot"], "available": None}
+        else:
+            continue  # the listing was erased under the retention rule
+        items.append({**item, "savedAt": row["saved_at"]})
+    return {"items": items}
+
+
+@app.post("/api/saved", status_code=201)
+def save_listing(request: SaveRequest, user: dict = Depends(accounts.require_user)):
+    listing_id = request.listing.get("id")
+    if not isinstance(listing_id, str) or not listing_id or len(listing_id) > 600:
+        raise HTTPException(status_code=400, detail={"code": "bad_listing", "message": "This listing can't be saved."})
+    with db.connect() as conn:
+        known = db.get_listing(conn, listing_id) is not None
+        # Listings from the database are looked up again when shown; only pasted ones need a copy.
+        snapshot = None if known else request.listing
+        if snapshot is not None and len(json.dumps(snapshot)) > MAX_SNAPSHOT_BYTES:
+            raise HTTPException(status_code=413, detail={"code": "too_large", "message": "This listing is too large to save."})
+        if db.count_saved(conn, user["id"]) >= MAX_SAVED:
+            raise HTTPException(status_code=409, detail={"code": "saved_full", "message": f"You can save up to {MAX_SAVED} homes. Remove one first."})
+        saved_at = db.save_listing(conn, user["id"], listing_id, snapshot)
+    return {"id": listing_id, "savedAt": saved_at}
+
+
+@app.delete("/api/saved")
+def unsave_listing(id: str, user: dict = Depends(accounts.require_user)):
+    with db.connect() as conn:
+        db.unsave_listing(conn, user["id"], id)
+    return {"ok": True}
+
+
+# The built front-end, served from the same address as the API (after every /api route).
+if (STATIC_DIR / "index.html").exists():
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="site")

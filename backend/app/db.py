@@ -1,7 +1,10 @@
-"""SQLite storage for normalised listings.
+"""SQLite storage for normalised listings and for accounts.
 
-Only listing facts are stored. Contact persons, phone numbers, e-mail addresses and
+Listings: only listing facts are stored. Contact persons, phone numbers, e-mail addresses and
 images are never saved (data minimisation under the Swiss revDSG).
+
+Accounts: e-mail address, password hash, the search profile and the saved homes of people who
+chose to create an account. Deleting the account erases all of it (delete_user).
 """
 
 import json
@@ -55,6 +58,30 @@ CREATE TABLE IF NOT EXISTS scrape_runs (
     status     TEXT,
     message    TEXT
 );
+
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    email         TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    profile       TEXT,              -- the search profile (JSON); NULL until the setup is finished
+    filters       TEXT,              -- the last filters (JSON)
+    sort          TEXT,
+    created_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,     -- SHA-256 of the cookie value, never the value itself
+    user_id    INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE TABLE IF NOT EXISTS saved_listings (
+    user_id    INTEGER NOT NULL,
+    listing_id TEXT NOT NULL,
+    saved_at   TEXT NOT NULL,
+    snapshot   TEXT,                 -- the card (JSON), only for pasted listings that aren't in `listings`
+    PRIMARY KEY (user_id, listing_id)
+);
 """
 
 LISTING_FIELDS = [
@@ -75,6 +102,8 @@ MIGRATIONS = {
     "active": "INTEGER DEFAULT 1",   # 0 = taken offline at the source (hidden, kept until retention ends)
     "inactive_since": "TEXT",
     "last_checked": "TEXT",          # last single-listing check while a student viewed it
+    "wishes": "TEXT",                # who the landlord is looking for (JSON, app/wishes.py); NULL = not read yet
+    "wishes_version": "TEXT",
 }
 
 
@@ -108,11 +137,23 @@ def upsert_listing(conn: sqlite3.Connection, listing: dict) -> None:
         values[field] = json.dumps(values[field] or [])
     columns = ", ".join(LISTING_FIELDS)
     placeholders = ", ".join(f":{field}" for field in LISTING_FIELDS)
-    updates = ", ".join(f"{field}=excluded.{field}" for field in LISTING_FIELDS if field != "id")
+    updates = ", ".join(
+        # Scrapers don't know the English title: keep the stored one unless the title changed.
+        "title_en=CASE WHEN listings.title IS excluded.title THEN COALESCE(excluded.title_en, listings.title_en) ELSE excluded.title_en END"
+        if field == "title_en" else f"{field}=excluded.{field}"
+        for field in LISTING_FIELDS if field != "id"
+    )
+    # The wishes are read from the text: read them again when the title or description changed.
+    wishes = (
+        "wishes=CASE WHEN listings.title IS excluded.title AND listings.description IS excluded.description "
+        "THEN listings.wishes ELSE NULL END, "
+        "wishes_version=CASE WHEN listings.title IS excluded.title AND listings.description IS excluded.description "
+        "THEN listings.wishes_version ELSE NULL END"
+    )
     conn.execute(
         f"""INSERT INTO listings ({columns}, first_seen, last_seen)
             VALUES ({placeholders}, :seen, :seen)
-            ON CONFLICT(id) DO UPDATE SET {updates}, last_seen=:seen, active=1, inactive_since=NULL""",
+            ON CONFLICT(id) DO UPDATE SET {wishes}, {updates}, last_seen=:seen, active=1, inactive_since=NULL""",
         {**values, "seen": seen},
     )
 
@@ -130,6 +171,7 @@ def row_to_listing(row: sqlite3.Row) -> dict:
     for field in ("risk_flags", *JSON_FIELDS):
         listing[field] = json.loads(listing[field] or "[]")
     listing["risk_details"] = json.loads(listing.get("risk_details") or "{}")
+    listing["wishes"] = json.loads(listing["wishes"]) if listing.get("wishes") is not None else None
     for key in ("is_private", "is_furnished", "is_temporary"):
         listing[key] = bool(listing[key])
     return listing
@@ -172,8 +214,14 @@ def update_title_en(conn: sqlite3.Connection, listing_id: str, title_en: str) ->
     conn.execute("UPDATE listings SET title_en=? WHERE id=?", (title_en, listing_id))
 
 
+def update_wishes(conn: sqlite3.Connection, listing_id: str, wishes: list[dict], version: str) -> None:
+    conn.execute("UPDATE listings SET wishes=?, wishes_version=? WHERE id=?", (json.dumps(wishes, ensure_ascii=False), version, listing_id))
+
+
 def delete_stale(conn: sqlite3.Connection) -> int:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)).isoformat(timespec="seconds")
+    # A saved home is erased together with its listing: the retention rule has no exceptions.
+    conn.execute("DELETE FROM saved_listings WHERE listing_id IN (SELECT id FROM listings WHERE last_seen < ?)", (cutoff,))
     return conn.execute("DELETE FROM listings WHERE last_seen < ?", (cutoff,)).rowcount
 
 
@@ -214,3 +262,88 @@ def last_successful_runs(conn: sqlite3.Connection) -> dict[str, str]:
     """Source -> finish time of its latest complete run."""
     rows = conn.execute("SELECT source, MAX(finished) FROM scrape_runs WHERE status='ok' GROUP BY source")
     return {source: finished for source, finished in rows}
+
+
+# Accounts ---------------------------------------------------------------------------------
+
+def _user(row: sqlite3.Row | None) -> dict | None:
+    if row is None:
+        return None
+    user = dict(row)
+    for field in ("profile", "filters"):
+        user[field] = json.loads(user[field]) if user[field] else None
+    return user
+
+
+def create_user(conn: sqlite3.Connection, email: str, password_hash: str) -> int:
+    cursor = conn.execute(
+        "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)", (email, password_hash, now_iso()),
+    )
+    return cursor.lastrowid
+
+
+def user_by_email(conn: sqlite3.Connection, email: str) -> dict | None:
+    return _user(conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone())
+
+
+def user_by_id(conn: sqlite3.Connection, user_id: int) -> dict | None:
+    return _user(conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone())
+
+
+def save_preferences(conn: sqlite3.Connection, user_id: int, profile: dict, filters: dict, sort: str) -> None:
+    conn.execute(
+        "UPDATE users SET profile=?, filters=?, sort=? WHERE id=?",
+        (json.dumps(profile), json.dumps(filters), sort, user_id),
+    )
+
+
+def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
+    conn.execute("DELETE FROM saved_listings WHERE user_id=?", (user_id,))
+    conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+    conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+
+
+def create_session(conn: sqlite3.Connection, user_id: int, token_hash: str, expires_at: str) -> None:
+    conn.execute(
+        "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+        (token_hash, user_id, now_iso(), expires_at),
+    )
+
+
+def user_for_session(conn: sqlite3.Connection, token_hash: str) -> dict | None:
+    row = conn.execute(
+        "SELECT users.* FROM sessions JOIN users ON users.id = sessions.user_id WHERE token_hash=? AND expires_at > ?",
+        (token_hash, now_iso()),
+    ).fetchone()
+    return _user(row)
+
+
+def delete_session(conn: sqlite3.Connection, token_hash: str) -> None:
+    conn.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash,))
+
+
+def delete_expired_sessions(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now_iso(),))
+
+
+def saved_rows(conn: sqlite3.Connection, user_id: int) -> list[dict]:
+    """The user's saved homes, newest first."""
+    rows = conn.execute("SELECT * FROM saved_listings WHERE user_id=? ORDER BY saved_at DESC, rowid DESC", (user_id,))
+    return [{**dict(row), "snapshot": json.loads(row["snapshot"]) if row["snapshot"] else None} for row in rows]
+
+
+def count_saved(conn: sqlite3.Connection, user_id: int) -> int:
+    return conn.execute("SELECT COUNT(*) FROM saved_listings WHERE user_id=?", (user_id,)).fetchone()[0]
+
+
+def save_listing(conn: sqlite3.Connection, user_id: int, listing_id: str, snapshot: dict | None) -> str:
+    """Saves once: saving a home again keeps the first date."""
+    conn.execute(
+        "INSERT OR IGNORE INTO saved_listings (user_id, listing_id, saved_at, snapshot) VALUES (?, ?, ?, ?)",
+        (user_id, listing_id, now_iso(), json.dumps(snapshot) if snapshot else None),
+    )
+    return conn.execute("SELECT saved_at FROM saved_listings WHERE user_id=? AND listing_id=?", (user_id, listing_id)).fetchone()[0]
+
+
+def unsave_listing(conn: sqlite3.Connection, user_id: int, listing_id: str) -> None:
+    conn.execute("DELETE FROM saved_listings WHERE user_id=? AND listing_id=?", (user_id, listing_id))

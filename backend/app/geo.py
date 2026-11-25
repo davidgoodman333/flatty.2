@@ -72,15 +72,71 @@ def place_coordinates(*texts: str | None) -> tuple[float, float] | None:
     return locate(*texts)[1]
 
 
-DESTINATIONS = [
-    (("university of bern", "uni bern", "unibe", "unitobler", "vonroll", "hochschulstrasse"), "University of Bern", (46.9505, 7.4381)),
-    (("bfh", "berner fachhochschule", "fachhochschule"), "BFH Bern", (46.9614, 7.4655)),
-    (("ph bern", "phbern", "pädagogische"), "PH Bern", (46.9532, 7.4318)),
-    (("insel", "inselspital"), "Inselspital", (46.9471, 7.4245)),
-    (("wankdorf",), "Wankdorf", (46.9630, 7.4650)),
-    (("bahnhof", "hauptbahnhof", "bern hb", "station", "bern"), "Bern station", (46.9490, 7.4391)),
+# Where students study: name chosen in the app -> (short label, school in an English e-mail,
+# school in a German e-mail, coordinates). The same list is in src/options.ts (CAMPUSES); keep
+# both in sync. Coordinates come from OpenStreetMap (street address of each building).
+CAMPUSES = {
+    "University of Bern": ("Uni Bern", "the University of Bern", "an der Universität Bern", (46.9506, 7.4385)),
+    "BFH (Bern University of Applied Sciences)": ("BFH", "the Bern University of Applied Sciences (BFH)", "an der Berner Fachhochschule (BFH)", (46.9513, 7.4352)),
+    "Uni Bern: Main building (Hochschulstrasse 4)": ("Uni Bern main building", "the University of Bern", "an der Universität Bern", (46.9506, 7.4385)),
+    "Uni Bern: UniS (Schanzeneckstrasse 1)": ("UniS", "the University of Bern", "an der Universität Bern", (46.9502, 7.4360)),
+    "Uni Bern: ExWi, Exact Sciences (Sidlerstrasse 5)": ("ExWi", "the University of Bern", "an der Universität Bern", (46.9511, 7.4389)),
+    "Uni Bern: Unitobler (Lerchenweg 36)": ("Unitobler", "the University of Bern", "an der Universität Bern", (46.9538, 7.4302)),
+    "Uni Bern: vonRoll (Fabrikstrasse 8)": ("vonRoll", "the University of Bern", "an der Universität Bern", (46.9533, 7.4232)),
+    "Uni Bern: Uni Mittelstrasse (Mittelstrasse 43)": ("Uni Mittelstrasse", "the University of Bern", "an der Universität Bern", (46.9558, 7.4356)),
+    "Uni Bern: Uni Engehalde (Engehaldenstrasse 8)": ("Uni Engehalde", "the University of Bern", "an der Universität Bern", (46.9538, 7.4396)),
+    "Uni Bern: Bühlplatz, Chemistry and Life Sciences (Baltzerstrasse 4)": ("Bühlplatz", "the University of Bern", "an der Universität Bern", (46.9518, 7.4285)),
+    "Uni Bern: Insel campus, Medicine (Freiburgstrasse 18)": ("Insel campus", "the University of Bern", "an der Universität Bern", (46.9474, 7.4258)),
+    "Uni Bern: Tierspital, Vetsuisse (Länggassstrasse 120)": ("Tierspital", "the University of Bern", "an der Universität Bern", (46.9564, 7.4268)),
+    "Uni Bern: Sport Science, ZSSw (Bremgartenstrasse 145)": ("ZSSw", "the University of Bern", "an der Universität Bern", (46.9623, 7.4318)),
+    "BFH: Business (Brückenstrasse 73)": ("BFH Business", "the Bern University of Applied Sciences (BFH)", "an der Berner Fachhochschule (BFH)", (46.9424, 7.4406)),
+    "BFH: Health (Murtenstrasse 10)": ("BFH Health", "the Bern University of Applied Sciences (BFH)", "an der Berner Fachhochschule (BFH)", (46.9487, 7.4273)),
+    "BFH: Health (Schwarztorstrasse 48)": ("BFH Health", "the Bern University of Applied Sciences (BFH)", "an der Berner Fachhochschule (BFH)", (46.9446, 7.4324)),
+    "BFH: Social Work (Hallerstrasse 10)": ("BFH Social Work", "the Bern University of Applied Sciences (BFH)", "an der Berner Fachhochschule (BFH)", (46.9526, 7.4353)),
+    "BFH: Engineering and Computer Science, Bern (Wankdorffeldstrasse 102)": ("BFH Wankdorf", "the Bern University of Applied Sciences (BFH)", "an der Berner Fachhochschule (BFH)", (46.9648, 7.4562)),
+    "BFH: HKB Arts, Bümpliz (Fellerstrasse 11)": ("HKB Bümpliz", "the Bern Academy of the Arts (HKB)", "an der Hochschule der Künste Bern (HKB)", (46.9470, 7.3915)),
+    "BFH: HKB Music (Papiermühlestrasse 13a)": ("HKB Music", "the Bern Academy of the Arts (HKB)", "an der Hochschule der Künste Bern (HKB)", (46.9554, 7.4605)),
+    "BFH: HKB Music and Theatre (Ostermundigenstrasse 103)": ("HKB Ostermundigenstrasse", "the Bern Academy of the Arts (HKB)", "an der Hochschule der Künste Bern (HKB)", (46.9566, 7.4726)),
+    "BFH: HAFL Agriculture, Forest and Food Sciences (Zollikofen)": ("BFH-HAFL Zollikofen", "the Bern University of Applied Sciences (BFH)", "an der Berner Fachhochschule (BFH)", (46.9918, 7.4680)),
+    "BFH: Engineering and Computer Science, Biel/Bienne (Quellgasse 21)": ("BFH Biel", "the Bern University of Applied Sciences (BFH)", "an der Berner Fachhochschule (BFH)", (47.1422, 7.2448)),
+    "BFH: Architecture, Wood and Civil Engineering, Biel/Bienne (Solothurnstrasse 102)": ("BFH Biel", "the Bern University of Applied Sciences (BFH)", "an der Berner Fachhochschule (BFH)", (47.1586, 7.2769)),
+    "BFH: Burgdorf (Pestalozzistrasse 20)": ("BFH Burgdorf", "the Bern University of Applied Sciences (BFH)", "an der Berner Fachhochschule (BFH)", (47.0574, 7.6211)),
+    "PHBern, University of Teacher Education (Fabrikstrasse 8)": ("PHBern", "PHBern, the University of Teacher Education", "an der PHBern", (46.9533, 7.4232)),
+    "gibb Berufsfachschule Bern (Lorrainestrasse 1)": ("gibb", "gibb Berufsfachschule Bern", "an der gibb Berufsfachschule Bern", (46.9548, 7.4449)),
+    "BFF Bern (Monbijoustrasse 21)": ("BFF Bern", "BFF Bern", "an der BFF Bern", (46.9445, 7.4365)),
+    "WKS KV Bildung (Effingerstrasse 70)": ("WKS KV Bildung", "WKS KV Bildung in Bern", "an der WKS KV Bildung", (46.9459, 7.4283)),
+    "Bildungszentrum Pflege (Freiburgstrasse 133)": ("BZ Pflege", "the Berner Bildungszentrum Pflege", "am Berner Bildungszentrum Pflege", (46.9431, 7.4088)),
+    "Feusi Bildungszentrum (Max-Daetwyler-Platz 1)": ("Feusi", "Feusi Bildungszentrum in Bern", "am Feusi Bildungszentrum", (46.9664, 7.4655)),
+}
+
+# Free text (older profiles, pasted values) -> the closest campus entry.
+DESTINATION_KEYWORDS = [
+    (("vonroll", "von roll", "fabrikstrasse"), "Uni Bern: vonRoll (Fabrikstrasse 8)"),
+    (("unitobler", "lerchenweg"), "Uni Bern: Unitobler (Lerchenweg 36)"),
+    (("insel", "inselspital"), "Uni Bern: Insel campus, Medicine (Freiburgstrasse 18)"),
+    (("ph bern", "phbern", "pädagogische"), "PHBern, University of Teacher Education (Fabrikstrasse 8)"),
+    (("hkb", "hochschule der künste"), "BFH: HKB Arts, Bümpliz (Fellerstrasse 11)"),
+    (("bfh", "berner fachhochschule", "fachhochschule", "applied sciences"), "BFH (Bern University of Applied Sciences)"),
+    (("university of bern", "universität bern", "uni bern", "unibe", "hochschulstrasse"), "University of Bern"),
 ]
 DEFAULT_DESTINATION = ("Bern station", (46.9490, 7.4391))
+
+
+def campus(text: str | None) -> tuple[str, str, str, tuple[float, float]] | None:
+    """The campus entry for a profile's destination, or None if it can't be placed."""
+    if text in CAMPUSES:
+        return CAMPUSES[text]
+    query = (text or "").lower()
+    for keywords, name in DESTINATION_KEYWORDS:
+        if any(keyword in query for keyword in keywords):
+            return CAMPUSES[name]
+    return None
+
+
+def school_name(text: str | None, german: bool = False) -> str:
+    """How to name the student's school in an e-mail ("" if unknown)."""
+    entry = campus(text)
+    return entry[2 if german else 1] if entry else ""
 
 
 def distance_km(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -97,11 +153,10 @@ def neighbourhood(city: str | None, lat: float | None, lng: float | None) -> str
 
 
 def resolve_destination(text: str | None) -> tuple[str, tuple[float, float], bool]:
-    """Return (name, coordinates, is_exact). Unknown places fall back to Bern station."""
-    query = (text or "").lower()
-    for keywords, name, coords in DESTINATIONS:
-        if any(keyword in query for keyword in keywords):
-            return name, coords, True
+    """Return (short name, coordinates, is_exact). Unknown places fall back to Bern station."""
+    entry = campus(text)
+    if entry:
+        return entry[0], entry[3], True
     return DEFAULT_DESTINATION[0], DEFAULT_DESTINATION[1], False
 
 

@@ -38,5 +38,21 @@ RECHECK_MINUTES = float(os.getenv("FLATTY_RECHECK_MINUTES", "60"))
 OLLAMA_URL = os.getenv("FLATTY_OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("FLATTY_OLLAMA_MODEL", "qwen3:8b")
 
+# Accounts. A private test starts as soon as one of these two is set: then only invited people
+# can create an account, and listings, link checks and e-mail drafts need a log-in.
+#   FLATTY_ALLOWED_EMAILS  comma-separated e-mail addresses that may create an account and log in
+#   FLATTY_INVITE_CODE     a code that must be entered when creating an account
+ALLOWED_EMAILS = {item.strip().lower() for item in os.getenv("FLATTY_ALLOWED_EMAILS", "").split(",") if item.strip()}
+INVITE_CODE = os.getenv("FLATTY_INVITE_CODE", "").strip()
+# Online test: cookies only travel over https. Set when the site is reached through a tunnel
+# that doesn't tell Flatty the visitor used https (then it can't detect it by itself).
+SECURE_COOKIES = os.getenv("FLATTY_SECURE_COOKIES", "0") == "1"
+PRIVATE = bool(ALLOWED_EMAILS or INVITE_CODE)
+SESSION_DAYS = int(os.getenv("FLATTY_SESSION_DAYS", "30"))
+
+# The built front-end (`pnpm build` writes dist/). When it exists, the API serves it too, so
+# one process on one port is the whole website.
+STATIC_DIR = Path(os.getenv("FLATTY_STATIC_DIR", BACKEND_DIR.parent / "dist"))
+
 # Search area: City of Bern plus the closest suburbs (west, south, east, north).
 BERN_BBOX = (7.37, 46.91, 7.51, 46.99)

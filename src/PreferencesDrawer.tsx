@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Profile } from "./api";
 import Icon from "./Icon";
 import {
-  APARTMENT_TYPES, AREAS, BUDGET_MAX, BUDGET_MIN, COUNTRIES, MAIN_LANGUAGES, MAP_AREAS, OTHER_LANGUAGES, PRIORITIES,
-  SUPPORT_QUESTIONS,
+  APARTMENT_TYPES, AREAS, BUDGET_MAX, BUDGET_MIN, CAMPUSES, CAMPUS_GROUPS, COUNTRIES, findCampus, MAIN_LANGUAGES, OTHER_LANGUAGES,
+  PRIORITIES, SUPPORT_QUESTIONS,
 } from "./options";
 
 type Props = {
@@ -11,6 +11,8 @@ type Props = {
   onApply: (profile: Profile) => void;
   onClose: () => void;
   onRestartSetup: () => void;
+  /** The "Account" section: who is signed in, or the invitation to create an account. */
+  account?: React.ReactNode;
 };
 
 const toggled = (values: string[], value: string) =>
@@ -18,7 +20,7 @@ const toggled = (values: string[], value: string) =>
 
 // Edits a copy of the preferences; nothing changes until "Apply changes", so Cancel, Esc and
 // clicking outside always leave the search as it was.
-export default function PreferencesDrawer({ initial, onApply, onClose, onRestartSetup }: Props) {
+export default function PreferencesDrawer({ initial, onApply, onClose, onRestartSetup, account }: Props) {
   const [draft, setDraft] = useState<Profile>(initial);
   const [newArea, setNewArea] = useState("");
   const heading = useRef<HTMLHeadingElement>(null);
@@ -42,7 +44,7 @@ export default function PreferencesDrawer({ initial, onApply, onClose, onRestart
   }, []); // once per opening; the latest onClose is read from the ref
 
   const extraLanguages = draft.languages.filter((language) => !MAIN_LANGUAGES.includes(language));
-  const extraAreas = draft.areas.filter((area) => !AREAS.includes(area) && !MAP_AREAS.includes(area));
+  const extraAreas = draft.areas.filter((area) => !AREAS.includes(area));
 
   const addArea = () => {
     const area = newArea.trim();
@@ -80,7 +82,7 @@ export default function PreferencesDrawer({ initial, onApply, onClose, onRestart
           <section className="drawer-section">
             <h3>Where</h3>
             <div className="chips">
-              {[...AREAS, ...MAP_AREAS, ...extraAreas].map((area) => (
+              {[...AREAS, ...extraAreas].map((area) => (
                 <button className={draft.areas.includes(area) ? "chip active" : "chip"} key={area} onClick={() => update({ areas: toggled(draft.areas, area) })} type="button">
                   {draft.areas.includes(area) && <Icon name="check" size={14} />}{area}
                 </button>
@@ -94,11 +96,14 @@ export default function PreferencesDrawer({ initial, onApply, onClose, onRestart
               />
               <button disabled={!newArea.trim()} onClick={addArea} type="button">Add</button>
             </div>
-            <label className="drawer-label" htmlFor="drawer-destination">Work or university</label>
-            <div className="text-input drawer-input">
-              <Icon name="work" size={17} />
-              <input id="drawer-destination" onChange={(event) => update({ destination: event.target.value })} placeholder="Enter a destination" value={draft.destination} />
-            </div>
+            <label className="drawer-label" htmlFor="drawer-destination">Where you study</label>
+            <select className="option-select" id="drawer-destination" onChange={(event) => update({ destination: event.target.value })} value={findCampus(draft.destination).name}>
+              {CAMPUS_GROUPS.map((group) => (
+                <optgroup key={group} label={group}>
+                  {CAMPUSES.filter((campus) => campus.group === group).map((campus) => <option key={campus.name}>{campus.name}</option>)}
+                </optgroup>
+              ))}
+            </select>
           </section>
 
           <section className="drawer-section">
@@ -143,6 +148,12 @@ export default function PreferencesDrawer({ initial, onApply, onClose, onRestart
 
           <section className="drawer-section">
             <h3>About you</h3>
+            <label className="drawer-label" htmlFor="drawer-name">Your name</label>
+            <div className="text-input drawer-input">
+              <Icon name="mail" size={17} />
+              <input autoComplete="name" id="drawer-name" maxLength={80} onChange={(event) => update({ name: event.target.value })} placeholder="First and last name" value={draft.name} />
+            </div>
+            <p className="drawer-hint">Only used to sign your application e-mails.</p>
             <label className="drawer-label" htmlFor="drawer-country">Country</label>
             <select className="option-select" id="drawer-country" onChange={(event) => update({ country: event.target.value })} value={draft.country}>
               {COUNTRIES.map((country) => <option key={country}>{country}</option>)}
@@ -161,6 +172,13 @@ export default function PreferencesDrawer({ initial, onApply, onClose, onRestart
               </div>
             ))}
           </section>
+
+          {account && (
+            <section className="drawer-section">
+              <h3>Account</h3>
+              {account}
+            </section>
+          )}
 
           <button className="drawer-restart" onClick={onRestartSetup} type="button">Go through the full setup again instead</button>
         </div>

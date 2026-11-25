@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  ApiError, ApiUnavailable, checkLink, checkListingOnline, demoApartments, emptyFilters, fetchSources, generateText, matchListings,
-  PAGE_SIZE, type Apartment, type Filters, type ListingStatus, type Profile, type Reason, type SortKey, type SourceInfo,
+  ApiError, ApiUnavailable, checkLink, checkListingOnline, deleteAccount, demoApartments, emptyFilters, fetchSaved, fetchSession,
+  fetchSources, generateText, logOut, matchListings, PAGE_SIZE, saveListing, savePreferences, unsaveListing,
+  type Account, type Apartment, type EmailLanguage, type Filters, type ListingStatus, type Profile, type Reason, type SavedItem,
+  type Session, type SortKey, type SourceInfo,
 } from "./api";
+import AuthBox, { type AuthMode } from "./AuthBox";
+import HowItWorks from "./HowItWorks";
 import Icon from "./Icon";
-import { APARTMENT_TYPES, AREAS, BUDGET_MAX, BUDGET_MIN, COUNTRIES, MAIN_LANGUAGES, OTHER_LANGUAGES, PRIORITIES } from "./options";
+import { APARTMENT_TYPES, AREAS, BUDGET_MAX, BUDGET_MIN, CAMPUSES, CAMPUS_GROUPS, COUNTRIES, DEFAULT_CAMPUS, findCampus, MAIN_LANGUAGES, OTHER_LANGUAGES, PRIORITIES } from "./options";
 import MapRadius from "./MapRadius";
 import PreferencesDrawer from "./PreferencesDrawer";
 
@@ -24,7 +28,6 @@ const KIND_DESCRIPTIONS: Record<string, string> = {
   House: "House",
 };
 const FEATURE_FILTERS = ["Furnished", "Balcony or garden", "Pets allowed", "Dishwasher", "Washing machine", "Lift", "Parking", "Wheelchair accessible"];
-const MAIN_FEATURE_COUNT = 3; // Furnished, balcony and pets are shown first; the rest behind "Show more"
 const PRICE_GAP = 100; // smallest distance between the two price handles
 const pricePercent = (value: number) => ((value - BUDGET_MIN) / (BUDGET_MAX - BUDGET_MIN)) * 100;
 // Quick type chips → the five home types used in the preferences.
@@ -42,11 +45,18 @@ const timeAgo = (value: string) => {
 const formatDate = (value: string) => new Date(value).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 // Filters inside the "More filters" panel (the second step of the filter box).
 const countActiveFilters = (filters: Filters) =>
-  [filters.roomsMin, filters.surfaceMin, filters.maxRisk, filters.availableBy].filter((value) => value !== null).length
+  [filters.roomsMin, filters.surfaceMin, filters.maxRisk].filter((value) => value !== null).length + filters.features.length
   + (filters.rental !== "any" ? 1 : 0) + (filters.withPhotos ? 1 : 0) + (filters.sources.length ? 1 : 0);
 // Type and maximum price are preferences, so "Reset filters" leaves them alone.
 const hasAnyFilter = (filters: Filters) =>
-  countActiveFilters(filters) > 0 || filters.priceMin !== null || filters.features.length > 0 || filters.areaLat !== null;
+  countActiveFilters(filters) > 0 || filters.priceMin !== null || filters.availableBy !== null || filters.neededUntil !== null
+  || filters.areaLat !== null;
+// "1 Feb 2027 – 30 Jun 2027" for the period the student needs the home.
+const periodLabel = (from: string | null, until: string | null) =>
+  from && until ? `${formatDate(from)} – ${formatDate(until)}` : from ? `From ${formatDate(from)}` : until ? `Until ${formatDate(until)}` : "";
+const NO_LISTINGS: Apartment[] = []; // the map in the setup shows no listings yet
+const EMAIL_LANGUAGES: [EmailLanguage, string][] = [["English", "English"], ["German", "Deutsch"]];
+type Draft = { text: string; engine: string };
 
 // Map marker colour per reply level, the same colours as the "Reply …" badges in the list.
 const replyColor = (apartment: Apartment) => (apartment.replyLevel === "likely" ? "#e55242" : "#4c2730");
@@ -68,16 +78,25 @@ const riskLevel = (score: number) => {
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("welcome");
-  const [showLogin, setShowLogin] = useState(false);
+  // Who is logged in. null until the back-end has answered (or turned out not to be running).
+  const [session, setSession] = useState<Session | null>(null);
+  const account = session?.user ?? null;
+  // The log-in box: inside the welcome page, a dialog on every other screen.
+  const [authBox, setAuthBox] = useState<{ mode: AuthMode; reason?: string } | null>(null);
+  // True once the setup is finished (now, or earlier and remembered by the account).
+  const [onboarded, setOnboarded] = useState(false);
+  const [saved, setSaved] = useState<SavedItem[]>([]);
+  const pendingSave = useRef<Apartment | null>(null); // the home to save right after logging in
+  const [justSaved, setJustSaved] = useState(""); // id of the home whose heart was just tapped (it pops once)
+  const savedPreferences = useRef("");
+  const [aboutReturn, setAboutReturn] = useState<Screen>("welcome");
   const [step, setStep] = useState(1);
+  const [fullName, setFullName] = useState("");
   const [languages, setLanguages] = useState(["English"]);
-  const [showOtherLanguage, setShowOtherLanguage] = useState(false);
   const [budget, setBudget] = useState(1800);
   const [areas, setAreas] = useState(["Länggasse"]);
-  const [showOtherArea, setShowOtherArea] = useState(false);
-  const [otherArea, setOtherArea] = useState("");
   const [showMap, setShowMap] = useState(false);
-  const [destination, setDestination] = useState("University of Bern");
+  const [destination, setDestination] = useState(DEFAULT_CAMPUS.name);
   const [priorities, setPriorities] = useState(["Public transport", "Grocery stores"]);
   const [country, setCountry] = useState("Switzerland");
   const [hasGuarantor, setHasGuarantor] = useState<"yes" | "no" | "">("");
@@ -86,7 +105,7 @@ export default function App() {
   const [hasSwissBank, setHasSwissBank] = useState<"yes" | "no" | "">("");
   const [hasResidencePermit, setHasResidencePermit] = useState<"yes" | "no" | "">("");
   const [apartmentTypes, setApartmentTypes] = useState(["Studio"]);
-  const [activeTab, setActiveTab] = useState<"search" | "link">("search");
+  const [activeTab, setActiveTab] = useState<"search" | "link" | "saved">("search");
   const [link, setLink] = useState("");
   const [pastedText, setPastedText] = useState("");
   const [linkProblem, setLinkProblem] = useState<{ message: string; askForText: boolean } | null>(null);
@@ -102,7 +121,6 @@ export default function App() {
   // The filter box opens in two steps: main filters, then "More filters".
   const [showMainFilters, setShowMainFilters] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
-  const [showAllFeatures, setShowAllFeatures] = useState(false);
   const [showBlockedSources, setShowBlockedSources] = useState(false);
   const [sources, setSources] = useState<SourceInfo[]>([]);
   const [sourceCounts, setSourceCounts] = useState<Record<string, number>>({});
@@ -121,17 +139,21 @@ export default function App() {
   const [generatedEngine, setGeneratedEngine] = useState("");
   const [generating, setGenerating] = useState(false);
   const [copied, setCopied] = useState(false);
+  // E-mail drafts come in both languages; each one appears as soon as it is written.
+  const [emailLanguage, setEmailLanguage] = useState<EmailLanguage>("English");
+  const [emails, setEmails] = useState<Partial<Record<EmailLanguage, Draft>>>({});
   const generateRequest = useRef(0);
 
   const progress = `${step * (100 / 6)}%`;
-  const preferenceText = useMemo(() => `${areas.join(", ")} · up to CHF ${budget.toLocaleString("de-CH")}`, [areas, budget]);
+  const campus = findCampus(destination);
   const profile: Profile = {
-    languages, budget, areas, destination, priorities, country, hasGuarantor, hasViewingPerson,
+    name: fullName.trim(), languages, budget, areas, destination, priorities, country, hasGuarantor, hasViewingPerson,
     hasSwissNumber, hasSwissBank, hasResidencePermit, apartmentTypes,
   };
 
   type YesNo = "yes" | "no" | "";
-  const applyPreferences = (next: Profile) => {
+  const setProfile = (next: Profile) => {
+    setFullName(next.name);
     setLanguages(next.languages);
     setBudget(next.budget);
     setAreas(next.areas);
@@ -144,6 +166,9 @@ export default function App() {
     setHasSwissBank(next.hasSwissBank as YesNo);
     setHasResidencePermit(next.hasResidencePermit as YesNo);
     setApartmentTypes(next.apartmentTypes);
+  };
+  const applyPreferences = (next: Profile) => {
+    setProfile(next);
     setShowPreferences(false);
     setNotice(screen === "result" ? "Preferences saved. Your results update when you go back to them." : "Preferences saved. Your results are updating.");
   };
@@ -157,6 +182,142 @@ export default function App() {
   const toggle = (value: string, values: string[], setter: (next: string[]) => void) => {
     setter(values.includes(value) ? values.filter((item) => item !== value) : [...values, value]);
   };
+
+  // Accounts ---------------------------------------------------------------------------
+  // Loads what the account remembers: profile, filters and sort order.
+  const restore = (user: Account) => {
+    if (user.profile) {
+      setProfile(user.profile);
+      setOnboarded(true);
+    }
+    if (user.filters) setFilters({ ...emptyFilters, ...user.filters, types: [], priceMax: null });
+    if (user.sort) setSort(user.sort);
+  };
+
+  const refreshSaved = () => fetchSaved().then(setSaved).catch(() => undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchSession().then((next) => {
+      if (cancelled) return;
+      setSession(next);
+      if (!next.user) return;
+      restore(next.user);
+      if (next.user.profile) setScreen("browse");
+      refreshSaved();
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The session ended (expired, or logged out elsewhere): ask to log in again. True if it handled the error.
+  const sessionEnded = (error: unknown) => {
+    if (!(error instanceof ApiError && error.code === "login_required")) return false;
+    setSession((current) => current && { ...current, user: null });
+    setSaved([]);
+    setShowPreferences(false);
+    setScreen("welcome");
+    setAuthBox({ mode: "login", reason: "Please log in to continue." });
+    return true;
+  };
+
+  const addSaved = async (apartment: Apartment) => {
+    setJustSaved(apartment.id);
+    setSaved((current) => current.some((item) => item.listing.id === apartment.id)
+      ? current : [{ listing: apartment, savedAt: new Date().toISOString(), available: null }, ...current]);
+    try {
+      await saveListing(apartment);
+    } catch (error) {
+      setSaved((current) => current.filter((item) => item.listing.id !== apartment.id));
+      if (!sessionEnded(error)) setNotice(error instanceof ApiError ? error.message : "Couldn’t save this home. Please try again.");
+    }
+  };
+
+  const removeSaved = async (item: SavedItem) => {
+    setSaved((current) => current.filter((other) => other.listing.id !== item.listing.id));
+    try {
+      await unsaveListing(item.listing.id);
+    } catch (error) {
+      setSaved((current) => [item, ...current]);
+      if (!sessionEnded(error)) setNotice("Couldn’t remove this home. Please try again.");
+    }
+  };
+
+  const isSaved = (apartment: Apartment) => saved.some((item) => item.listing.id === apartment.id);
+  const toggleSave = (apartment: Apartment) => {
+    if (!account) {
+      pendingSave.current = apartment;
+      setAuthBox({ mode: "login", reason: "Log in to save this home." });
+      return;
+    }
+    const item = saved.find((other) => other.listing.id === apartment.id);
+    if (item) removeSaved(item);
+    else addSaved(apartment);
+  };
+
+  const closeAuthBox = () => {
+    pendingSave.current = null;
+    setAuthBox(null);
+  };
+
+  const onLoggedIn = (user: Account) => {
+    setSession((current) => current && { ...current, user });
+    setAuthBox(null);
+    const pending = pendingSave.current;
+    pendingSave.current = null;
+    refreshSaved().then(() => pending && addSaved(pending));
+    if (user.profile) {
+      // What the account remembers wins over what was typed in before logging in.
+      restore(user);
+      if (screen === "welcome" || screen === "onboarding") setScreen("browse");
+      setNotice("Welcome back. Your profile is loaded.");
+    } else if (onboarded) {
+      if (screen === "welcome") setScreen("browse"); // the profile from this visit is saved below
+    } else if (screen !== "onboarding") {
+      setStep(1);
+      setScreen("onboarding");
+    }
+  };
+
+  // Logging out starts from a clean page, so nothing of the profile stays in the browser tab.
+  const signOut = async () => {
+    try {
+      await logOut();
+    } finally {
+      window.location.reload();
+    }
+  };
+
+  const removeAccount = async () => {
+    if (!window.confirm("Delete your Flatty account? Your profile and saved homes are erased. This can’t be undone.")) return;
+    try {
+      await deleteAccount();
+      window.location.reload();
+    } catch (error) {
+      if (!sessionEnded(error)) setNotice("Couldn’t delete the account. Please try again.");
+    }
+  };
+
+  // "Start a new search" / "Continue your search", also used by the How-it-works page.
+  const startSearch = () => {
+    if (session?.private && !account) {
+      setScreen("welcome");
+      setAuthBox({ mode: "register" });
+    } else if (onboarded) {
+      setScreen("browse");
+    } else {
+      setStep(1);
+      setScreen("onboarding");
+    }
+  };
+
+  const openAbout = () => {
+    setAboutReturn(screen);
+    setScreen("about");
+    window.scrollTo(0, 0);
+  };
+  // Back to where "How it works" was opened from, if that was the search.
+  const leaveAbout = () => (aboutReturn === "browse" || aboutReturn === "result" ? setScreen(aboutReturn) : startSearch());
 
   const loadListings = async (append = false) => {
     const request = ++listingRequest.current;
@@ -173,7 +334,7 @@ export default function App() {
       setUpdatedAt(result.updatedAt);
       setRefreshing(Boolean(result.refreshing));
     } catch (error) {
-      if (request === listingRequest.current) setListingError(error instanceof Error ? error.message : "Couldn’t load listings.");
+      if (request === listingRequest.current && !sessionEnded(error)) setListingError(error instanceof Error ? error.message : "Couldn’t load listings.");
     } finally {
       if (request === listingRequest.current) {
         setLoadingListings(false);
@@ -198,6 +359,26 @@ export default function App() {
   useEffect(() => {
     if (screen === "browse" && sources.length === 0) fetchSources().then(setSources);
   }, [screen, sources.length]);
+
+  // Remember the profile, filters and sort order of a logged-in student (shortly after each change).
+  useEffect(() => {
+    if (!account || !onboarded || queryKey === savedPreferences.current) return;
+    const timer = window.setTimeout(() => {
+      savedPreferences.current = queryKey;
+      savePreferences(profile, filters, sort).catch((error) => {
+        savedPreferences.current = "";
+        sessionEnded(error);
+      });
+    }, 800);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account, onboarded, queryKey]);
+
+  // The Saved tab shows fresh scores, and whether each home is still online.
+  useEffect(() => {
+    if (screen === "browse" && activeTab === "saved" && account) refreshSaved();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, activeTab, account?.email]);
 
   const enabledSources = sources.filter((source) => source.scraping_allowed);
   const blockedSources = sources.filter((source) => !source.scraping_allowed);
@@ -230,7 +411,7 @@ export default function App() {
   const filterSummary = [
     selectedTypeLabels.length ? selectedTypeLabels.join(", ") : "All types",
     `CHF ${(filters.priceMin ?? BUDGET_MIN).toLocaleString("de-CH")} – ${budget.toLocaleString("de-CH")}`,
-    filters.features.length ? `${filters.features.length} must-have${filters.features.length === 1 ? "" : "s"}` : "",
+    periodLabel(filters.availableBy, filters.neededUntil),
     filters.areaLat !== null ? `Within ${filters.radiusKm} km` : "",
     moreFilterCount ? `${moreFilterCount} more` : "",
   ].filter(Boolean);
@@ -240,6 +421,7 @@ export default function App() {
   };
 
   const finishOnboarding = () => {
+    setOnboarded(true);
     setScreen("browse");
     setGenerated(null);
   };
@@ -267,6 +449,7 @@ export default function App() {
     if (status.available === false) {
       setApartments((current) => current.filter((item) => item.id !== apartment.id));
       setTotalMatches((current) => Math.max(0, current - 1));
+      setSaved((current) => current.map((item) => (item.listing.id === apartment.id ? { ...item, available: false } : item)));
     }
   };
 
@@ -290,40 +473,80 @@ export default function App() {
     }
   };
 
-  const fallbackText = (kind: "summary" | "email") => {
-    if (kind === "summary") {
-      return `${selectedApartment.title} in ${selectedApartment.area}. ${selectedApartment.meta} for ${selectedApartment.rent} per month. ${[...(selectedApartment.notes ?? []), ...selectedApartment.reasons].map((reason) => reason.title).join(", ")}.`;
+  // Used only when the back-end can't be reached (demo mode).
+  const fallbackSummary = () =>
+    `${selectedApartment.title} in ${selectedApartment.area}. ${selectedApartment.meta} for ${selectedApartment.rent} per month. ${[...(selectedApartment.notes ?? []), ...selectedApartment.reasons].map((reason) => reason.title).join(", ")}.`;
+  const fallbackEmail = (language: EmailLanguage) => {
+    const name = fullName.trim();
+    if (language === "German") {
+      return [
+        "Guten Tag",
+        "",
+        `Ich interessiere mich für Ihr Inserat «${selectedApartment.originalTitle || selectedApartment.title}» (${selectedApartment.area}).`
+          + (name ? ` Ich heisse ${name}.` : "") + ` Ich studiere ${campus.schoolDe}.`,
+        "",
+        "Gerne sende ich Ihnen meine Unterlagen und komme für eine Besichtigung vorbei.",
+        "",
+        "Freundliche Grüsse",
+        ...(name ? [name] : []),
+      ].join("\n");
     }
     return [
       "Hello,",
       "",
-      `I’m interested in the ${selectedApartment.title.toLowerCase()} in ${selectedApartment.area}. I’m from ${country} and currently study or work at ${destination}. The location would be a great fit for my commute and my preference for ${naturalList(priorities.map((item) => item.toLowerCase()))}.`,
+      `I am interested in your listing “${selectedApartment.title}” in ${selectedApartment.area}.` + (name ? ` My name is ${name}.` : "")
+        + (country && country !== "Other" ? ` I am from ${country} and study at ${campus.school}.` : ` I study at ${campus.school}.`),
       "",
-      `I’m looking for ${naturalList(apartmentTypes.map((item) => item.toLowerCase()))} and I speak ${naturalList(languages)}.`
+      `I speak ${naturalList(languages)}.`
         + (hasGuarantor === "yes" ? " I have a guarantor who lives in Switzerland." : "")
-        + (hasViewingPerson === "yes" ? " I also have someone who can attend a viewing on my behalf." : "")
-        + " I would be happy to provide any required documents.",
+        + (hasViewingPerson === "yes" ? " Someone can attend a viewing on my behalf." : ""),
+      "I would be happy to send my documents and to arrange a viewing.",
       "",
       "Kind regards",
+      ...(name ? [name] : []),
     ].join("\n");
+  };
+
+  // True if the listing went offline meanwhile (then nothing is drafted for it).
+  const listingWentOffline = (error: unknown, request: number) => {
+    if (!(error instanceof ApiError && error.code === "listing_inactive")) return false;
+    if (request === generateRequest.current) {
+      setListingStatus({ available: false, message: error.message });
+      setGenerated(null);
+      setGenerating(false);
+    }
+    return true;
   };
 
   const generate = async (kind: "summary" | "email") => {
     const request = ++generateRequest.current;
     setGenerated(kind);
-    setGenerating(true);
     setCopied(false);
+    if (kind === "email") {
+      // Both versions are written: the listing's language first, because that is the one to send.
+      const first: EmailLanguage = selectedApartment.language === "German" ? "German" : "English";
+      setEmailLanguage(first);
+      setEmails({});
+      await Promise.all([first, first === "German" ? "English" : "German"].map(async (item) => {
+        const language = item as EmailLanguage;
+        let draft: Draft;
+        try {
+          draft = await generateText("email", selectedApartment, profile, language);
+        } catch (error) {
+          if (listingWentOffline(error, request)) return;
+          draft = { text: fallbackEmail(language), engine: "template" };
+        }
+        if (request === generateRequest.current) setEmails((current) => ({ ...current, [language]: draft }));
+      }));
+      return;
+    }
+    setGenerating(true);
     let text: string, engine: string;
     try {
       ({ text, engine } = await generateText(kind, selectedApartment, profile));
     } catch (error) {
-      if (error instanceof ApiError && error.code === "listing_inactive") {
-        setListingStatus({ available: false, message: error.message });
-        setGenerated(null);
-        setGenerating(false);
-        return;
-      }
-      [text, engine] = [fallbackText(kind), "template"];
+      if (listingWentOffline(error, request)) return;
+      [text, engine] = [fallbackSummary(), "template"];
     }
     if (request !== generateRequest.current) return; // a newer request replaced this one
     setGeneratedText(text);
@@ -331,33 +554,85 @@ export default function App() {
     setGenerating(false);
   };
 
+  // What the "Use this listing" card shows right now.
+  const emailDraft = emails[emailLanguage];
+  const shownText = generated === "email" ? emailDraft?.text ?? "" : generatedText;
+  const shownEngine = generated === "email" ? emailDraft?.engine ?? "" : generatedEngine;
+  const writing = generated === "email" ? !emailDraft : generating;
+
   const copyGenerated = async () => {
-    await navigator.clipboard.writeText(generatedText);
+    await navigator.clipboard.writeText(shownText);
     setCopied(true);
   };
+
+  const heartClass = (apartment: Apartment, base: string) =>
+    !isSaved(apartment) ? base : justSaved === apartment.id ? `${base} saved pop` : `${base} saved`;
+
+  // One listing card, used by the results and by the Saved tab.
+  const listingCard = (apartment: Apartment, index: number, gone = false) => {
+    const liked = isSaved(apartment);
+    return (
+      <article className={gone ? "apartment-card gone" : "apartment-card"} key={apartment.id}>
+        <div className={`apartment-visual visual-${(index % 3) + 1}`}>
+          {apartment.images[0] ? (
+            <img alt="" className="apartment-photo" loading="lazy" referrerPolicy="no-referrer" src={apartment.images[0].thumb} />
+          ) : (
+            <div className="pixel-windows"><i /><i /><i /><i /></div>
+          )}
+          {gone
+            ? <span className="reply-badge unlikely">No longer online</span>
+            : <span className={`reply-badge ${apartment.replyLevel}`}>Reply {apartment.replyLabel.toLowerCase()}</span>}
+          <span className={`risk-badge ${riskLevel(apartment.risk).tone}`}>{apartment.risk}% risk</span>
+          <button
+            aria-label={liked ? `Remove ${apartment.title} from your saved homes` : `Save ${apartment.title}`} aria-pressed={liked}
+            className={heartClass(apartment, "save-button")} onClick={() => toggleSave(apartment)} title={liked ? "Saved" : "Save"} type="button"
+          >
+            <Icon name="heart" size={17} />
+          </button>
+        </div>
+        <div className="apartment-info">
+          <span className="area-label"><Icon name="map" size={13} /> {apartment.area}<em>· {apartment.sourceName}</em></span>
+          <h2>{apartment.title}</h2>
+          <p>{apartment.meta}</p>
+          <div className="mini-tags">{apartment.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
+        </div>
+        <div className="apartment-action"><strong>{apartment.rent}<small>/month</small></strong><button onClick={() => checkApartment(apartment)} type="button">Check listing <Icon name="arrow" size={16} /></button></div>
+      </article>
+    );
+  };
+
+  // Nothing is drawn until we know whether someone is logged in, so the welcome page doesn't flash by.
+  if (!session) return <div className="app-shell" />;
 
   return (
     <div className="app-shell">
       {screen !== "welcome" && (
         <header className="topbar">
-          <button className="brand" onClick={() => { setScreen("welcome"); setShowLogin(false); }} type="button">
+          <button className="brand" onClick={() => { setScreen("welcome"); closeAuthBox(); }} type="button">
             <span className="brand-mark"><Icon name="home" size={16} /></span>
             <span>Flatty</span>
           </button>
-          {screen === "browse" && <span className="header-pref">{preferenceText}</span>}
-          {(screen === "browse" || screen === "result") && (
-            <button aria-haspopup="dialog" className="edit-button" onClick={() => setShowPreferences(true)} type="button">
-              Edit profile
-            </button>
-          )}
-          {screen === "about" && (
-            <>
-              <span className="header-pref">How Flatty works</span>
-              <button className="edit-button" onClick={() => { setStep(1); setScreen("onboarding"); }} type="button">
-                Start a search
+          {screen === "about" && <span className="header-pref">How Flatty works</span>}
+          <nav className="topbar-actions" aria-label="Flatty">
+            {(screen === "browse" || screen === "result") && (
+              <>
+                <button className="topbar-link" onClick={openAbout} type="button">How it works</button>
+                <button aria-haspopup="dialog" className="edit-button" onClick={() => setShowPreferences(true)} type="button">
+                  Edit profile
+                </button>
+              </>
+            )}
+            {screen === "about" && (
+              <button className="edit-button" onClick={leaveAbout} type="button">
+                {onboarded ? "Back to your search" : "Start a search"}
               </button>
-            </>
-          )}
+            )}
+            {screen !== "about" && (account
+              ? <button className="topbar-link" onClick={signOut} type="button">Log out</button>
+              : <button className="topbar-link" onClick={() => setAuthBox({ mode: "login" })} type="button">Log in</button>)}
+            {/* Online test: forget the developer password on this device. */}
+            {session.siteGate && <a className="topbar-link" href="/__gate/logout">Lock site</a>}
+          </nav>
         </header>
       )}
 
@@ -375,115 +650,31 @@ export default function App() {
             <h1>Find a flat<br />that fits you.</h1>
             <p>Set your budget, commute, and everyday needs. Flatty checks the rest.</p>
 
-            {!showLogin ? (
-              <div className="welcome-actions">
-                <button
-                  className="welcome-primary"
-                  onClick={() => { setStep(1); setScreen("onboarding"); }}
-                  type="button"
-                >
-                  Start a new search <Icon name="arrow" size={19} />
-                </button>
-                <button className="login-trigger" onClick={() => setShowLogin(true)} type="button">
-                  Log in
-                </button>
-                <button className="info-trigger" onClick={() => setScreen("about")} type="button">
-                  How it works
-                </button>
-              </div>
-            ) : (
-              <form
-                className="login-box"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  setScreen("browse");
-                }}
-              >
-                <div className="login-heading">
-                  <strong>Welcome back</strong>
-                  <button onClick={() => setShowLogin(false)} type="button">Cancel</button>
+            {!authBox ? (
+              <>
+                <div className="welcome-actions">
+                  <button className="welcome-primary" onClick={startSearch} type="button">
+                    {onboarded ? "Continue your search" : "Start a new search"} <Icon name="arrow" size={19} />
+                  </button>
+                  {account
+                    ? <button className="login-trigger" onClick={signOut} type="button">Log out</button>
+                    : <button className="login-trigger" onClick={() => setAuthBox({ mode: "login" })} type="button">Log in</button>}
+                  <button className="info-trigger" onClick={openAbout} type="button">
+                    How it works
+                  </button>
                 </div>
-                <label>
-                  <span>Email</span>
-                  <input type="email" placeholder="you@email.com" required />
-                </label>
-                <label>
-                  <span>Password</span>
-                  <input type="password" placeholder="••••••••" required />
-                </label>
-                <button className="login-submit" type="submit">
-                  Log in <Icon name="arrow" size={17} />
-                </button>
-              </form>
+                {account && <p className="welcome-account">Signed in as {account.email}</p>}
+                {session.private && !account && <p className="welcome-account">Private test · you need an invitation to use Flatty</p>}
+              </>
+            ) : (
+              <AuthBox initialMode={authBox.mode} key={authBox.mode} onCancel={closeAuthBox} onDone={onLoggedIn} reason={authBox.reason} session={session} />
             )}
           </section>
         </main>
       )}
 
       {screen === "about" && (
-        <main className="about-page">
-          <header className="about-intro">
-            <span className="step-code">HOW FLATTY WORKS</span>
-            <h1>Your search stays<br />with you.</h1>
-            <p>
-              Flatty uses a locally trained AI model to check listings and find the homes that fit you best.
-              Your personal data is not sent to someone else’s server.
-            </p>
-          </header>
-
-          <section className="process-tree" aria-label="Flatty process">
-            <div className="tree-root">
-              <span className="tree-icon local-ai"><i /><i /><i /><i /></span>
-              <div>
-                <span className="tree-number">01</span>
-                <h2>Local AI model</h2>
-                <p>Runs locally. Your data stays private.</p>
-              </div>
-            </div>
-
-            <div className="shape-path" aria-hidden="true"><i /><i /><i /><i /><i /></div>
-
-            <div className="tree-branches">
-              <article className="tree-card">
-                <span className="tree-number">02</span>
-                <span className="tree-card-icon">?</span>
-                <h3>Risk prediction</h3>
-                <p>The model gives every listing a risk score. Flatty warns you—it never silently removes a home.</p>
-              </article>
-              <article className="tree-card">
-                <span className="tree-number">03</span>
-                <span className="tree-card-icon"><Icon name="check" size={21} /></span>
-                <h3>Your preferences</h3>
-                <p>Your budget and filters decide which listings you see.</p>
-              </article>
-              <article className="tree-card">
-                <span className="tree-number">04</span>
-                <span className="tree-card-icon"><Icon name="link" size={21} /></span>
-                <h3>Any listing</h3>
-                <p>Found a place yourself? Paste the link and Flatty checks the page.</p>
-              </article>
-            </div>
-
-            <div className="shape-path reverse" aria-hidden="true"><i /><i /><i /></div>
-
-            <div className="tree-result">
-              <span className="tree-result-score">92%</span>
-              <div>
-                <span className="tree-number">05</span>
-                <h2>Your best chances</h2>
-                <p>See how likely each landlord is to reply to you.</p>
-              </div>
-              <button onClick={() => { setStep(1); setScreen("onboarding"); }} type="button">
-                Start matching <Icon name="arrow" size={18} />
-              </button>
-            </div>
-          </section>
-
-          <aside className="local-note">
-            <strong>LOCAL MEANS LOCAL</strong>
-            <span>Your preferences stay on your device and are used only to improve your Flatty results.</span>
-          </aside>
-        </main>
+        <HowItWorks ctaLabel={onboarded && !(session.private && !account) ? "Back to your search" : "Start matching"} onStart={leaveAbout} />
       )}
 
       {screen === "onboarding" && (
@@ -502,39 +693,20 @@ export default function App() {
               <div className="question">
                 <label>Which languages do you speak?</label>
                 <div className="chips">
-                  {MAIN_LANGUAGES.map((language) => (
-                    <button className={languages.includes(language) ? "chip active" : "chip"} key={language} onClick={() => toggle(language, languages, setLanguages)} type="button">
+                  {/* The four main languages, plus any others the student added from the list below. */}
+                  {[...MAIN_LANGUAGES, ...languages.filter((language) => !MAIN_LANGUAGES.includes(language))].map((language) => (
+                    <button aria-pressed={languages.includes(language)} className={languages.includes(language) ? "chip active" : "chip"} key={language} onClick={() => toggle(language, languages, setLanguages)} type="button">
                       {languages.includes(language) && <Icon name="check" size={14} />}{language}
                     </button>
                   ))}
-                  <button className={showOtherLanguage ? "chip active" : "chip"} onClick={() => setShowOtherLanguage((value) => !value)} type="button">
-                    Other <Icon name="chevron" size={14} />
-                  </button>
                 </div>
-                {showOtherLanguage && (
-                  <select
-                    aria-label="Choose another language"
-                    autoFocus
-                    className="option-select"
-                    defaultValue=""
-                    onChange={(event) => {
-                      if (event.target.value && !languages.includes(event.target.value)) {
-                        setLanguages([...languages, event.target.value]);
-                      }
-                      setShowOtherLanguage(false);
-                    }}
-                  >
-                    <option value="" disabled>Choose another language</option>
-                    {OTHER_LANGUAGES.map((language) => <option key={language}>{language}</option>)}
-                  </select>
-                )}
-                {languages.some((language) => !MAIN_LANGUAGES.includes(language)) && (
-                  <div className="selected-extras">
-                    {languages.filter((language) => !MAIN_LANGUAGES.includes(language)).map((language) => (
-                      <button key={language} onClick={() => setLanguages(languages.filter((item) => item !== language))} type="button">{language} ×</button>
-                    ))}
-                  </div>
-                )}
+                <select
+                  aria-label="Add another language" className="option-select" value=""
+                  onChange={(event) => event.target.value && setLanguages([...languages, event.target.value])}
+                >
+                  <option value="">Other languages…</option>
+                  {OTHER_LANGUAGES.filter((language) => !languages.includes(language)).map((language) => <option key={language}>{language}</option>)}
+                </select>
               </div>
               <div className="question">
                 <div className="label-row"><label>Maximum monthly rent</label><strong>CHF {budget.toLocaleString("de-CH")}</strong></div>
@@ -547,37 +719,42 @@ export default function App() {
           {step === 2 && (
             <section className="step-content">
               <h1>Where should it be?</h1>
-              <p>Pick one or more areas.</p>
+              <p>Tell us where you study and where you would like to live.</p>
+              <div className="question">
+                <label htmlFor="destination">Where do you study?</label>
+                <select className="option-select campus-select" id="destination" onChange={(event) => setDestination(event.target.value)} value={campus.name}>
+                  {CAMPUS_GROUPS.map((group) => (
+                    <optgroup key={group} label={group}>
+                      {CAMPUSES.filter((item) => item.group === group).map((item) => <option key={item.name}>{item.name}</option>)}
+                    </optgroup>
+                  ))}
+                </select>
+                <span className="input-note">Flatty estimates the commute from every home to this place.</span>
+              </div>
               <div className="question">
                 <label>Preferred areas</label>
                 <div className="chips">
                   {AREAS.map((area) => (
-                    <button className={areas.includes(area) ? "chip active" : "chip"} key={area} onClick={() => toggle(area, areas, setAreas)} type="button">
+                    <button aria-pressed={areas.includes(area)} className={areas.includes(area) ? "chip active" : "chip"} key={area} onClick={() => toggle(area, areas, setAreas)} type="button">
                       {areas.includes(area) && <Icon name="check" size={14} />}{area}
                     </button>
                   ))}
-                  <button className={showOtherArea ? "chip active" : "chip"} onClick={() => setShowOtherArea((value) => !value)} type="button">Other</button>
-                  <button className={showMap ? "chip active" : "chip"} onClick={() => setShowMap((value) => !value)} type="button"><Icon name="map" size={15} /> Choose on map</button>
+                  <button aria-expanded={showMap} className={showMap || filters.areaLat !== null ? "chip active" : "chip"} onClick={() => setShowMap((value) => !value)} type="button"><Icon name="map" size={15} /> Choose on map</button>
                 </div>
-                {showOtherArea && (
-                  <div className="text-input extra-input">
-                    <Icon name="map" size={18} />
-                    <input value={otherArea} onChange={(event) => setOtherArea(event.target.value)} placeholder="Enter a town or neighborhood" />
-                    <button onClick={() => { if (otherArea.trim() && !areas.includes(otherArea.trim())) setAreas([...areas, otherArea.trim()]); setOtherArea(""); }} type="button">Add</button>
-                  </div>
-                )}
                 {showMap && (
-                  <div className="mini-map">
-                    <span className="map-road road-one" /><span className="map-road road-two" /><span className="map-river" />
-                    <button className="map-pin pin-one" onClick={() => !areas.includes("Lorraine") && setAreas([...areas, "Lorraine"])} type="button"><Icon name="map" size={14} /> Lorraine</button>
-                    <button className="map-pin pin-two" onClick={() => !areas.includes("Monbijou") && setAreas([...areas, "Monbijou"])} type="button"><Icon name="map" size={14} /> Monbijou</button>
+                  <div className="setup-map">
+                    <MapRadius
+                      area={filters.areaLat !== null && filters.areaLng !== null ? { lat: filters.areaLat, lng: filters.areaLng } : null}
+                      centre={{ name: campus.short, lat: campus.lat, lng: campus.lng }}
+                      colorFor={replyColor}
+                      listings={NO_LISTINGS}
+                      onAreaChange={(area, radiusKm) => updateFilters({ areaLat: area?.lat ?? null, areaLng: area?.lng ?? null, radiusKm })}
+                      onSelect={checkApartment}
+                      radiusKm={filters.radiusKm}
+                    />
+                    <span className="input-note">Only homes inside the circle are shown. You can change the area later under Filters.</span>
                   </div>
                 )}
-              </div>
-              <div className="question">
-                <label htmlFor="destination">Work or university</label>
-                <div className="text-input"><Icon name="work" size={18} /><input id="destination" value={destination} onChange={(event) => setDestination(event.target.value)} placeholder="Enter a destination" /></div>
-                <span className="input-note">We’ll calculate the commute.</span>
               </div>
             </section>
           )}
@@ -587,7 +764,7 @@ export default function App() {
               <h1>What matters nearby?</h1>
               <p>Select your everyday essentials.</p>
               <div className="priority-grid">
-                {PRIORITIES.map(([name, icon, defaultNote]) => [name, icon, name === "Short commute" ? `To ${destination || "work"}` : defaultNote] as const).map(([name, icon, note]) => (
+                {PRIORITIES.map(([name, icon, defaultNote]) => [name, icon, name === "Short commute" ? `To ${campus.short}` : defaultNote] as const).map(([name, icon, note]) => (
                   <button className={priorities.includes(name) ? "priority active" : "priority"} key={name} onClick={() => toggle(name, priorities, setPriorities)} type="button">
                     <span className="priority-icon"><Icon name={icon} size={21} /></span>
                     <span><strong>{name}</strong><small>{note}</small></span>
@@ -600,10 +777,18 @@ export default function App() {
 
           {step === 4 && (
             <section className="step-content">
-              <h1>Where are you from?</h1>
+              <h1>Tell us about you.</h1>
               <p>This helps personalize your application.</p>
               <div className="question">
-                <label htmlFor="country">Country</label>
+                <label htmlFor="full-name">Your name</label>
+                <div className="text-input">
+                  <Icon name="mail" size={18} />
+                  <input autoComplete="name" id="full-name" maxLength={80} onChange={(event) => setFullName(event.target.value)} placeholder="First and last name" value={fullName} />
+                </div>
+                <span className="input-note">Only used to sign your application e-mails.</span>
+              </div>
+              <div className="question">
+                <label htmlFor="country">Where are you from?</label>
                 <select className="option-select country-select" id="country" value={country} onChange={(event) => setCountry(event.target.value)}>
                   {COUNTRIES.map((item) => <option key={item}>{item}</option>)}
                 </select>
@@ -702,9 +887,40 @@ export default function App() {
           <div className="tabs">
             <button className={activeTab === "search" ? "active" : ""} onClick={() => setActiveTab("search")} type="button"><Icon name="search" size={17} /> Search apartments</button>
             <button className={activeTab === "link" ? "active" : ""} onClick={() => setActiveTab("link")} type="button"><Icon name="link" size={17} /> Paste a link</button>
+            <button className={activeTab === "saved" ? "active" : ""} onClick={() => setActiveTab("saved")} type="button">
+              <Icon name="heart" size={17} /> Saved{saved.length > 0 && <span className="tab-count">{saved.length}</span>}
+            </button>
           </div>
 
-          {activeTab === "search" ? (
+          {activeTab === "saved" ? (
+            <section className="listings saved-list">
+              {!account ? (
+                <div className="link-panel">
+                  <span className="big-link-icon"><Icon name="heart" size={26} /></span>
+                  <h2>Keep the homes you like</h2>
+                  <p>Log in or create an account. Flatty then remembers your profile and every home you save.</p>
+                  <div className="saved-auth">
+                    <button className="primary-button" onClick={() => setAuthBox({ mode: "register" })} type="button">Create an account <Icon name="arrow" size={17} /></button>
+                    <button className="login-trigger" onClick={() => setAuthBox({ mode: "login" })} type="button">Log in</button>
+                  </div>
+                </div>
+              ) : saved.length === 0 ? (
+                <p className="list-message">No saved homes yet. Tap the heart on a listing to keep it here.</p>
+              ) : (
+                <>
+                  <div className="filter-line">
+                    <span>
+                      {saved.length} saved {saved.length === 1 ? "home" : "homes"}
+                      <small className="source-note">Newest first · scores are for your current profile</small>
+                    </span>
+                  </div>
+                  <div className="listing-stack">
+                    {saved.map((item, index) => listingCard(item.listing, index, item.available === false))}
+                  </div>
+                </>
+              )}
+            </section>
+          ) : activeTab === "search" ? (
             <section className="listings">
               <div className={showMainFilters ? "filter-box open" : "filter-box"}>
                 <div className="filter-box-head">
@@ -761,18 +977,33 @@ export default function App() {
                       </div>
                       <small className="filter-hint">The maximum is your budget. Listings up to 15 % above it are shown with a warning.</small>
                     </div>
-                    <div className="filter-group">
-                      <span>Must have</span>
-                      <div className="chips">
-                        {FEATURE_FILTERS.filter((feature, index) => showAllFeatures || index < MAIN_FEATURE_COUNT || filters.features.includes(feature)).map((feature) => (
-                          <button aria-pressed={filters.features.includes(feature)} className={filters.features.includes(feature) ? "chip active" : "chip"} key={feature} onClick={() => updateFilters({ features: filters.features.includes(feature) ? filters.features.filter((item) => item !== feature) : [...filters.features, feature] })} type="button">
-                            {filters.features.includes(feature) && <Icon name="check" size={14} />}{feature}
-                          </button>
-                        ))}
-                        <button aria-expanded={showAllFeatures} className="show-more-chips" onClick={() => setShowAllFeatures((value) => !value)} type="button">
-                          {showAllFeatures ? "Show less" : `Show ${FEATURE_FILTERS.slice(MAIN_FEATURE_COUNT).filter((feature) => !filters.features.includes(feature)).length} more`}
-                        </button>
+                    <div className="filter-group quick-dates">
+                      <span>When do you need it?</span>
+                      <div className="date-range">
+                        <label className="filter-field">
+                          <span>From</span>
+                          <input
+                            onChange={(event) => {
+                              const from = event.target.value || null;
+                              // An "until" before the new "from" makes no sense, so it is cleared.
+                              updateFilters({ availableBy: from, neededUntil: from && filters.neededUntil && filters.neededUntil < from ? null : filters.neededUntil });
+                            }}
+                            type="date" value={filters.availableBy ?? ""}
+                          />
+                        </label>
+                        <label className="filter-field">
+                          <span>Until</span>
+                          <input
+                            min={filters.availableBy ?? undefined}
+                            onChange={(event) => {
+                              const until = event.target.value || null;
+                              updateFilters({ neededUntil: until && filters.availableBy && until < filters.availableBy ? filters.availableBy : until });
+                            }}
+                            type="date" value={filters.neededUntil ?? ""}
+                          />
+                        </label>
                       </div>
+                      <small className="filter-hint">Leave “Until” empty for an open-ended stay. Homes that are free too late, or that end before you leave, are hidden.</small>
                     </div>
                   </div>
                   <MapRadius
@@ -781,11 +1012,22 @@ export default function App() {
                     listings={apartments}
                     onAreaChange={(area, radiusKm) => updateFilters({ areaLat: area?.lat ?? null, areaLng: area?.lng ?? null, radiusKm })}
                     onSelect={checkApartment}
+                    centre={{ name: campus.short, lat: campus.lat, lng: campus.lng }}
                     radiusKm={filters.radiusKm}
                   />
                 </div>
                 {showFilters && (
                   <div className="filter-panel">
+                    <div className="filter-group">
+                      <span>Must have</span>
+                      <div className="chips">
+                        {FEATURE_FILTERS.map((feature) => (
+                          <button aria-pressed={filters.features.includes(feature)} className={filters.features.includes(feature) ? "chip active" : "chip"} key={feature} onClick={() => updateFilters({ features: filters.features.includes(feature) ? filters.features.filter((item) => item !== feature) : [...filters.features, feature] })} type="button">
+                            {filters.features.includes(feature) && <Icon name="check" size={14} />}{feature}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                     <label className="filter-field">
                       <span>Rooms from</span>
                       <select onChange={(event) => updateFilters({ roomsMin: numberOrNull(event.target.value) })} value={filters.roomsMin ?? ""}>
@@ -812,10 +1054,6 @@ export default function App() {
                         <option value="permanent">Long-term only</option>
                         <option value="temporary">Temporary / sublet only</option>
                       </select>
-                    </label>
-                    <label className="filter-field">
-                      <span>Move in by</span>
-                      <input onChange={(event) => updateFilters({ availableBy: event.target.value || null })} type="date" value={filters.availableBy ?? ""} />
                     </label>
                     <label className="filter-check">
                       <input checked={filters.withPhotos} onChange={(event) => updateFilters({ withPhotos: event.target.checked })} type="checkbox" />
@@ -882,26 +1120,7 @@ export default function App() {
                 <p className="list-message">No listings match these settings. Try a higher budget, fewer filters or more websites.</p>
               )}
               <div className={loadingListings ? "listing-stack is-loading" : "listing-stack"}>
-                {apartments.map((apartment, index) => (
-                  <article className="apartment-card" key={apartment.id}>
-                    <div className={`apartment-visual visual-${(index % 3) + 1}`}>
-                      {apartment.images[0] ? (
-                        <img alt="" className="apartment-photo" loading="lazy" referrerPolicy="no-referrer" src={apartment.images[0].thumb} />
-                      ) : (
-                        <div className="pixel-windows"><i /><i /><i /><i /></div>
-                      )}
-                      <span className={`reply-badge ${apartment.replyLevel}`}>Reply {apartment.replyLabel.toLowerCase()}</span>
-                      <span className={`risk-badge ${riskLevel(apartment.risk).tone}`}>{apartment.risk}% risk</span>
-                    </div>
-                    <div className="apartment-info">
-                      <span className="area-label"><Icon name="map" size={13} /> {apartment.area}<em>· {apartment.sourceName}</em></span>
-                      <h2>{apartment.title}</h2>
-                      <p>{apartment.meta}</p>
-                      <div className="mini-tags">{apartment.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
-                    </div>
-                    <div className="apartment-action"><strong>{apartment.rent}<small>/month</small></strong><button onClick={() => checkApartment(apartment)} type="button">Check listing <Icon name="arrow" size={16} /></button></div>
-                  </article>
-                ))}
+                {apartments.map((apartment, index) => listingCard(apartment, index))}
               </div>
               {liveData && apartments.length < totalMatches && !loadingListings && (
                 <button className="show-more" disabled={loadingMore} onClick={() => loadListings(true)} type="button">
@@ -941,7 +1160,7 @@ export default function App() {
 
       {screen === "result" && (
         <main className="result-page">
-          <button className="back-link" onClick={() => setScreen("browse")} type="button"><Icon name="back" size={17} /> Back to results</button>
+          <button className="back-link" onClick={() => setScreen("browse")} type="button"><Icon name="back" size={17} /> {activeTab === "saved" ? "Back to saved homes" : "Back to results"}</button>
           {listingStatus.checking && <p className="online-status checking">Checking that this listing is still online…</p>}
           {listingGone && (
             <p className="online-status gone">
@@ -957,7 +1176,15 @@ export default function App() {
 
           <header className="listing-head">
             <span className="step-code">THE LISTING</span>
-            <h1>{selectedApartment.title}</h1>
+            <div className="listing-title-row">
+              <h1>{selectedApartment.title}</h1>
+              <button
+                aria-pressed={isSaved(selectedApartment)} className={heartClass(selectedApartment, "save-toggle")}
+                onClick={() => toggleSave(selectedApartment)} type="button"
+              >
+                <Icon name="heart" size={17} /> {isSaved(selectedApartment) ? "Saved" : "Save"}
+              </button>
+            </div>
             {selectedApartment.originalTitle && selectedApartment.originalTitle.toLowerCase() !== selectedApartment.title.toLowerCase() && (
               <p>Original German title: “{selectedApartment.originalTitle}”</p>
             )}
@@ -1022,6 +1249,27 @@ export default function App() {
                   </div>
                 ))}
               </div>
+            </section>
+          )}
+
+          {(selectedApartment.wishes?.length ?? 0) > 0 && (
+            <section className="listing-notes">
+              <span className="step-code">WHO THEY’RE LOOKING FOR</span>
+              <div className="notes-grid">
+                {selectedApartment.wishes?.map((wish) => (
+                  <div key={`${wish.topic}-${wish.title}`}>
+                    {wish.fit === "yes" ? <span className="fit-icon yes"><Icon name="check" size={15} /></span>
+                      : wish.fit === "no" ? <span className="fit-icon warn">!</span>
+                      : <span className="fit-icon unknown">?</span>}
+                    <p>
+                      <strong>{wish.title}</strong>
+                      <small>{wish.strength === "required" ? "Required" : "Preferred"} · “{wish.quote}”</small>
+                      {wish.fit === "unknown" && <small>Not in your profile, so it isn’t part of your reply chance.</small>}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              <p className="fit-empty">Read from the listing text by Flatty’s local AI. Check the original listing if a point matters to you.</p>
             </section>
           )}
 
@@ -1112,11 +1360,30 @@ export default function App() {
             <section className="generated-card">
               <div className="generated-head">
                 <span className="step-code">{generated === "summary" ? "LISTING SUMMARY" : "EMAIL DRAFT"}</span>
-                <button disabled={generating} onClick={copyGenerated} type="button">{copied ? "Copied" : "Copy"}</button>
+                <div className="generated-tools">
+                  {generated === "email" && (
+                    <div aria-label="Language of the e-mail" className="language-switch" role="group">
+                      {EMAIL_LANGUAGES.map(([language, label]) => (
+                        <button aria-pressed={emailLanguage === language} className={emailLanguage === language ? "active" : ""} key={language} onClick={() => { setEmailLanguage(language); setCopied(false); }} type="button">
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <button className="copy-button" disabled={writing} onClick={copyGenerated} type="button">{copied ? "Copied" : "Copy"}</button>
+                </div>
               </div>
-              <p>{generating ? "Writing with the local AI model…" : generatedText}</p>
-              {!generating && generatedEngine && (
-                <small className="engine-note">{generatedEngine === "template" ? "Written from a template (local AI model not running)" : `Written on this device by ${generatedEngine}`}</small>
+              <p>{writing ? "Writing with the local AI model…" : shownText}</p>
+              {generated === "email" && (
+                <small className="email-hint">
+                  {selectedApartment.language === "German"
+                    ? "This listing is written in German, so send the German version. The English one shows you what it says."
+                    : "Both versions say the same. Send the one in the landlord’s language."}
+                  {!fullName.trim() && " Add your name under “Edit profile” to sign the e-mail."}
+                </small>
+              )}
+              {!writing && shownEngine && (
+                <small className="engine-note">{shownEngine === "template" ? "Written from a template (local AI model not running)" : `Written by Flatty’s own AI model (${shownEngine}), not a cloud service`}</small>
               )}
             </section>
           )}
@@ -1128,9 +1395,34 @@ export default function App() {
           onApply={applyPreferences}
           onClose={() => setShowPreferences(false)}
           onRestartSetup={() => { setShowPreferences(false); setStep(1); setScreen("onboarding"); }}
+          account={account ? (
+            <>
+              <p className="drawer-hint">Signed in as <strong>{account.email}</strong>. Flatty remembers this profile and your saved homes.</p>
+              <div className="drawer-account">
+                <button onClick={signOut} type="button">Log out</button>
+                <button onClick={removeAccount} type="button">Delete account</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="drawer-hint">Create an account and Flatty remembers this profile and the homes you save.</p>
+              <div className="drawer-account">
+                <button onClick={() => { setShowPreferences(false); setAuthBox({ mode: "register" }); }} type="button">Create an account</button>
+                <button onClick={() => { setShowPreferences(false); setAuthBox({ mode: "login" }); }} type="button">Log in</button>
+              </div>
+            </>
+          )}
         />
       )}
-      {notice && !showPreferences && <div className="toast" role="status">{notice}</div>}
+      {authBox && screen !== "welcome" && (
+        <div className="drawer-layer auth-layer">
+          <div aria-hidden="true" className="drawer-backdrop" onClick={closeAuthBox} />
+          <div aria-label={authBox.mode === "register" ? "Create your account" : "Log in"} aria-modal="true" className="auth-dialog" role="dialog">
+            <AuthBox initialMode={authBox.mode} key={authBox.mode} onCancel={closeAuthBox} onDone={onLoggedIn} reason={authBox.reason} session={session} />
+          </div>
+        </div>
+      )}
+      {notice && !showPreferences && !authBox && <div className="toast" role="status">{notice}</div>}
     </div>
   );
 }

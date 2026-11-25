@@ -1,0 +1,407 @@
+# Flatty's rules: everything that decides the two scores on a listing.
+#
+#   1. Risk:  is this listing a scam?                         [risk]
+#   2. Reply: how likely is the landlord to reply to you?     [reply]
+#   3. What the local AI reads in the description             [ai.wishes]
+#
+# The app reads this file at start-up, so changing a number here changes the scores.
+# Restart the API afterwards (uvicorn --reload only watches .py files unless it is started
+# with --reload-include rules.toml).
+#
+# Weights are log-odds: positive raises the score, negative lowers it. As a rule of thumb,
+# +0.7 turns 50 % into about 67 %, and -2.0 turns 70 % into about 24 %.
+# Regular expressions: each list entry is one alternative; any one of them is enough.
+# Literal strings ('''…''') are used so that backslashes need no escaping.
+
+
+# ======================================================================================
+# 1. RISK: is this listing a scam?
+# ======================================================================================
+# Two parts are added in log-odds:
+#   a) the text model (machine learning on the listing text, trained by app/ml/train.py),
+#      helped by the red-flag phrases below;
+#   b) the listing signals below (price, photos, description length, who lists it, ...).
+
+[risk]
+# Assumed share of scams when there is no evidence either way.
+base_rate = 0.06
+# Characters of description needed before the text model's verdict counts fully. A shorter
+# text moves towards base_rate, unless it contains a red-flag phrase.
+full_text_evidence = 300
+# How strongly the red-flag phrases count inside the text model, compared with writing style.
+red_flag_scale = 2.0
+# Photos and street addresses are only judged on sites where they are normally present.
+photo_sources = ["flatfox"]
+address_sources = ["flatfox"]
+# Known non-profit housing organisations.
+trusted_providers = ["studentlodge"]
+
+# Used only before the text model is trained for the first time: bias + weight of each phrase.
+[risk.text_fallback]
+bias = -3.0
+deposit_before_viewing = 1.6
+no_viewing = 1.6
+payment_service = 1.6
+off_platform_contact = 1.0
+urgency = 0.6
+
+# --- 1a. Red-flag phrases scanned in the title and description (lower-cased text) --------
+# Swiss police and consumer warnings. Order matters for the trained model: add new phrases at
+# the end, and retrain (python -m app.ml.train) after changing this list.
+
+[[risk.red_flags]]
+key = "deposit_before_viewing"
+label = "Asks for a deposit or payment before a viewing"
+patterns = [
+  '''(kaution|depot|deposit|caution|anzahlung|vorauszahlung|vorkasse|first month).{0,100}(vor der besichtigung|vorab|im voraus|in advance|before (the )?(viewing|visit|keys)|avant (la )?visite|überweis|transfer|virement)''',
+]
+
+[[risk.red_flags]]
+key = "no_viewing"
+label = "No viewing offered or the owner is abroad"
+patterns = [
+  '''keine besichtigung''',
+  '''besichtigung (ist )?nicht möglich''',
+  '''no viewings?''',
+  '''cannot show''',
+  '''can't show''',
+  '''not possible to visit''',
+  '''(bin|wohne|lebe|befinde mich|arbeite) (zurzeit |derzeit |momentan |beruflich )?im ausland\b''',
+  '''i am (currently )?(abroad|overseas|in (the )?uk|in london)''',
+  '''je (suis|vis|travaille) .{0,25}(à|a) l['’ ]?étranger''',
+  '''können (wir|ich) (leider )?nicht nach bern kommen''',
+  '''schlüssel (werden |wird )?(per post|per kurier|zugeschickt|versendet)''',
+  '''keys? (will be )?(sent|mailed|posted|shipped)''',
+  '''clés .{0,30}(envoyées|par la poste)''',
+]
+
+[[risk.red_flags]]
+key = "off_platform_contact"
+label = "Pushes contact off the platform (WhatsApp, private e-mail)"
+patterns = [
+  '''whatsapp''', '''telegram''', '''signal app''',
+  '''@gmail\.''', '''@hotmail\.''', '''@yahoo\.''', '''@outlook\.''', '''@gmx\.''',
+  '''contact me (directly )?(at|by|via)''',
+  '''schreiben sie mir (direkt )?(an|per|auf)''',
+  '''kontaktieren sie mich (direkt )?(per|unter|über)''',
+  '''écrivez-moi''',
+]
+
+[[risk.red_flags]]
+key = "payment_service"
+label = "Mentions a risky payment channel"
+patterns = [
+  '''western union''', '''moneygram''', '''bitcoin''', '''crypto''', '''paysafe''', '''gift ?card''',
+  '''airbnb.{0,40}(zahlung|payment|paiement|kaution|deposit)''',
+  '''(zahlung|payment|paiement|kaution|caution|deposit|dépôt).{0,40}airbnb''',
+  '''treuhand.{0,30}(agentur|service)''',
+  '''escrow''',
+]
+
+[[risk.red_flags]]
+key = "urgency"
+label = "Creates time pressure"
+patterns = [
+  '''sehr dringend''', '''first come,? first served''', '''nur heute''', '''only today''',
+  '''act fast''', '''schnell entscheiden''', '''sofort überweisen''', '''urgent''',
+]
+
+# --- 1b. Listing signals -----------------------------------------------------------------
+# Expert prior (pitch slide 4, Swiss police and consumer warnings). Once expert-rated listings
+# exist, app/ml/train.py fits new weights into models/signal_weights.json, which then
+# overrides the weights here (the thresholds stay).
+
+[risk.signals.price_far_below_market]
+when = "Rent is under below_ratio of similar listings"
+below_ratio = 0.5
+weight = 1.2
+
+[risk.signals.price_below_market]
+when = "Rent is between price_far_below_market and below_ratio of similar listings"
+below_ratio = 0.65
+weight = 0.6
+
+[risk.signals.no_description]
+when = "Description shorter than shorter_than characters"
+shorter_than = 40
+weight = 0.9
+
+[risk.signals.short_description]
+when = "Description shorter than shorter_than characters (but not empty)"
+shorter_than = 200
+weight = 0.4
+
+[risk.signals.detailed_description]
+when = "Description at least at_least characters long"
+at_least = 600
+weight = -0.2
+
+[risk.signals.no_photos]
+when = "No photos (photo_sources only)"
+weight = 0.7
+
+[risk.signals.one_photo]
+when = "Only one photo (photo_sources only)"
+weight = 0.5
+
+[risk.signals.many_photos]
+when = "At least at_least photos (photo_sources only)"
+at_least = 5
+weight = -0.3
+
+[risk.signals.no_address]
+when = "No street address, only the area (address_sources only)"
+weight = 0.3
+
+[risk.signals.trusted_provider]
+when = "Listed by one of the trusted_providers"
+weight = -2.0
+
+[risk.signals.agency]
+when = "Listed by a company"
+weight = -0.7
+
+[risk.signals.private_landlord]
+when = "Listed privately (scams are almost always posted privately)"
+weight = 0.2
+
+[risk.signals.duplicate_text]
+when = """A private listing whose text (at least min_length characters) also appears in another
+listing in a different town, or at a rent that differs by more than price_difference"""
+min_length = 120
+price_difference = 0.25
+weight = 1.0
+
+
+# ======================================================================================
+# 2. REPLY: how likely is the landlord to reply to you?
+# ======================================================================================
+# No reply data exists yet, so these weights are the team's assumptions. Once
+# data/labels/reply_labels.csv has 30+ rows, app/ml/train.py learns weights that replace them.
+# Each factor shows on the listing page with its icon, title and detail when it applies.
+
+[reply]
+bias = -0.6
+# From this probability on, a reply counts as "likely".
+likely_from = 0.5
+# Rent compared with similar listings (1.0 = the usual price).
+cheap_below = 0.85
+expensive_above = 1.2
+
+[reply.factors.private_landlord]
+when = "Listed privately"
+weight = 0.6
+icon = "home"
+title = "Private landlord"
+detail = "Private landlords reply to students more often than agencies"
+
+[reply.factors.mentions_students]
+when = "The text mentions students (students_pattern below), or the AI read that students are welcome; never when the AI read that students aren't wanted"
+weight = 0.7
+icon = "work"
+title = "Student-friendly"
+detail = "The listing mentions students"
+
+[reply.factors.shared_flat]
+when = "A room in a shared flat or residence"
+weight = 0.5
+icon = "home"
+title = "Room in a shared flat"
+detail = "Shared flats are often let to students"
+
+[reply.factors.furnished_or_temporary]
+when = "Furnished or temporary"
+weight = 0.4
+icon = "home"
+title = "Furnished or temporary"
+detail = "Aimed at people who are new in town"
+
+[reply.factors.cheap_for_market]
+when = "Rent below cheap_below of similar listings"
+weight = -0.6
+icon = "search"
+title = "Cheap for the area"
+detail = "Expect many other applicants"
+
+[reply.factors.expensive_for_market]
+when = "Rent above expensive_above of similar listings"
+weight = 0.3
+icon = "search"
+title = "Rent above the usual level"
+detail = "Fewer people apply for expensive listings"
+
+[reply.factors.language_barrier]
+when = "The listing is written in a language you don't speak (German, French, Italian; English never counts)"
+weight = -0.7
+icon = "mail"
+title = "Listing in a language you don't speak"   # shown as "Listing written in <language>"
+detail = "Your reply chances improve if you answer in the listing's language"
+
+[reply.factors.has_permit]
+when = "You have a Swiss residence permit"
+weight = 0.5
+icon = "check"
+title = "You have a residence permit"
+detail = "Landlords often ask for one"
+
+[reply.factors.has_swiss_phone]
+when = "You have a Swiss phone number"
+weight = 0.3
+icon = "check"
+title = "You have a Swiss phone number"
+detail = "Landlords can reach you easily"
+
+[reply.factors.has_swiss_bank]
+when = "You have a Swiss bank account"
+weight = 0.3
+icon = "check"
+title = "You have a Swiss bank account"
+detail = "Rent and deposit are simple to arrange"
+
+[reply.factors.has_guarantor]
+when = "You have a guarantor in Switzerland"
+weight = 0.6
+icon = "check"
+title = "You have a guarantor in Switzerland"
+detail = "This lowers the landlord's risk"
+
+[reply.factors.has_viewing_person]
+when = "Someone can attend viewings for you"
+weight = 0.5
+icon = "check"
+title = "Someone can attend viewings for you"
+detail = "You can react to viewing dates quickly"
+
+# The next three come from what the AI read in the description (section 3). They count with
+# their weight times the strength of the wish (reply.strength). The title and detail shown
+# name the listing's own words.
+
+[reply.factors.language_wish_unmet]
+when = "The listing asks the new tenant to speak a language you don't speak"
+weight = -2.0
+icon = "mail"
+title = "Asks for a language you don't speak"
+detail = "Landlords mostly reply to people who meet their wishes"
+
+[reply.factors.language_wish_met]
+when = "The listing asks for a language you speak"
+weight = 0.5
+icon = "mail"
+title = "You speak the language they ask for"
+detail = "You meet one of the landlord's wishes"
+
+[reply.factors.not_for_students]
+when = "The listing wants working people or weekly commuters, or excludes students"
+weight = -1.8
+icon = "work"
+title = "Not looking for students"
+detail = "Landlords mostly reply to people who meet their wishes"
+
+# How much a wish counts: a required one fully, a preferred one 60 %.
+[reply.strength]
+required = 1.0
+preferred = 0.6
+
+# Words that count as "mentions students" (case-insensitive).
+[reply.students_pattern]
+patterns = [
+  '''student''', '''studierend''', '''studentin''', '''studenten''', '''étudiant''', '''studente''',
+  '''uni(versität|versity)?\b''', '''wg[- ]tauglich''', '''azubi''', '''praktikant''', '''intern''',
+]
+
+
+# ======================================================================================
+# 3. WHAT THE LOCAL AI READS IN THE DESCRIPTION
+# ======================================================================================
+# The AI (qwen3:8b through Ollama, on this machine) reads who the landlord or the flatmates
+# are looking for. It runs in the background (app/llm_worker.py), never during a search.
+#
+#   Step 1  Only sentences that match one of the topics below are sent to the AI. A listing
+#           without such a sentence has no wishes and costs no AI call.
+#   Step 2  The AI answers with each wish and the number of the sentence that states it
+#           (instructions: prompt below).
+#   Step 3  A wish is kept only if its sentence matches its own topic, a language wish names
+#           the language (language_names), an age range is written out in numbers, and the AI
+#           confirms it once more with a yes/no question about that sentence alone
+#           (verify_prompt below).
+#
+# What the wishes do:
+#   language    -> reply.factors.language_wish_unmet / language_wish_met. Together with
+#                  language_barrier: a German text alone costs -0.7; a German text that also
+#                  asks for a German speaker costs -0.7 - 2.0 (required) or -0.7 - 1.2 (preferred).
+#   occupation  -> reply.factors.not_for_students, or mentions_students if students are welcome
+#   gender, age, non_smoker -> shown on the listing page only: they aren't in your profile.
+
+[ai.wishes]
+# Change this after editing the prompt or the topics: all listings are then read again.
+version = "wishes-v2"
+# At most this many sentences per listing go to the AI.
+max_sentences = 30
+# Languages the AI may name in a language wish.
+languages = ["German", "French", "Italian", "English", "Spanish", "Portuguese"]
+
+# Counted as the same language, for the wishes and for your profile. Swiss German is German:
+# a listing asking for Schweizerdeutsch is met by a German speaker.
+[ai.wishes.language_aliases]
+"Swiss German" = "German"
+
+# Step 1: a sentence goes to the AI if it matches any of these (case-insensitive).
+[ai.wishes.topics]
+language = [
+  '''schweizerdeutsch''', '''mundart''', '''dialekt''', '''bärndütsch''', '''swiss.german''',
+  '''deutsch''', '''german''', '''englisch''', '''english''', '''französisch''', '''french''', '''français''',
+  '''francais''', '''italienisch''', '''italian''', '''italiano''', '''spanisch''', '''spanish''',
+  '''sprach''', '''language''', '''langue''', '''lingua''', '''spreche''', '''speak''', '''parl''',
+]
+gender = [
+  '''\bfrauen?\b''', '''weiblich''', '''männlich''', '''\bmann\b''', '''\bmänner\b''', '''mitbewohnerin''',
+  '''nachmieterin''', '''untermieterin''', '''mieterin''', '''studentin''', '''nichtraucherin''', '''female''',
+  '''\bwom[ae]n\b''', '''\bmale\b''', '''\bman\b''', '''\bgirls?\b''', '''\bguys?\b''',
+  '''femme''', '''homme''', '''donna''', '''uomo''', '''ragazz[ao]''',
+]
+age = [
+  '''\b\d{2}\s*(?:-|–|bis|und|and|to|à|e)\s*\d{2}\b''', '''jahre''', '''jährig''', '''alter\b''',
+  '''\bage[ds]?\b''', '''âge''', '''\banni\b''', '''\bans\b''', '''\balt\b''',
+]
+occupation = [
+  '''studi''', '''student''', '''étudiant''', '''studente''', '''berufstätig''', '''arbeit''', '''working''',
+  '''professional''', '''employ''', '''wochenaufenthalt''', '''pendler''', '''expat''', '''doktor''',
+  '''forschend''', '''praktikant''', '''azubi''', '''lehrling''',
+]
+non_smoker = ['''rauch''', '''smok''', '''fumeur''', '''fumat''', '''fumo''']
+
+# Step 3: a language wish must name the language in its own sentence.
+[ai.wishes.language_names]
+German = [
+  '''deutsch''', '''german''', '''allemand''', '''tedesco''',
+  '''schwiizerdütsch''', '''mundart''', '''dialekt''', '''bärndütsch''', '''züritüütsch''',  # Swiss German
+]
+French = ['''französisch''', '''franz\.''', '''french''', '''français''', '''francais''', '''francese''']
+Italian = ['''italienisch''', '''italian''', '''italien''', '''italiano''']
+English = ['''englisch''', '''english''', '''anglais''', '''inglese''']
+Spanish = ['''spanisch''', '''spanish''', '''espagnol''', '''spagnolo''', '''español''']
+Portuguese = ['''portugiesisch''', '''portuguese''', '''portugais''', '''portoghese''', '''português''']
+
+# Step 2: the instructions the AI gets with the numbered sentences.
+[ai.wishes.prompt]
+text = '''
+You read Swiss rental listings (German, French, Italian or English). You get numbered sentences from one listing.
+Find the sentences that say what the landlord or the current flatmates WANT FROM THE NEW TENANT, and return them as wishes.
+
+Topics:
+- language: the new tenant should speak a language. "languages" lists the languages; if any one of them is enough ("Schweizerdeutsch oder Deutsch"), list them all. Swiss German dialect (Schweizerdeutsch, Mundart, Bärndütsch) and standard German (Hochdeutsch, Deutsch) are both "German".
+- gender: the listing looks for a woman ("Mitbewohnerin gesucht", "nur Frauen", "weibliche", "Nachmieterin") or a man ("Mitbewohner (männlich)", "nur Männer"). A neutral form like "Mitbewohner/in", "Mitbewohner*in" or "Person" is NOT a gender wish.
+- age: an age range for the new tenant. Fill age_min and/or age_max.
+- occupation: "students" if students are explicitly welcome (also when listed with others: "Studierende oder Berufstätige", "egal ob Studi oder berufstätig"); "working" if employed people are wanted and students are not mentioned; "weekly_commuters" if it is meant for weekly residents or commuters (Wochenaufenthalter, Pendler) and students are not mentioned; "no_students" if students are excluded.
+- non_smoker: the new tenant must not smoke, or the flat is non-smoking ("Nichtraucher", "Nichtraucherwohnung").
+
+NOT wishes: facts about the landlord or the current flatmates ("Ich spreche Italienisch", "Wir sind berufstätig", "Alle sprechen Mundart", "Ich bin 28"), unless the same sentence also asks the new tenant for it.
+
+strength: "required" for must / only / nur / zwingend / vorausgesetzt / Bedingung / Anforderung; "preferred" for gerne / ideal / bevorzugt / am liebsten / würde mich freuen / erwünscht.
+sentence: the number of the sentence that states the wish. One sentence can hold several wishes.
+Return {"wishes": []} if no sentence states a wish. Never guess.'''
+
+# Step 3: the instructions for the yes/no check of each wish.
+[ai.wishes.verify_prompt]
+text = '''
+You check one sentence from a Swiss rental listing. Answer yes only if the sentence itself states the wish about the NEW tenant. Answer no if it only describes the landlord or the people who already live there ("Ich bin berufstätig", "Alle sprechen Mundart"), or if the wish is not in the sentence.'''

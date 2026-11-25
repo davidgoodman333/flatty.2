@@ -32,7 +32,17 @@ robots.txt alone doesn't decide the question. Homegate and WG-Zimmer allow bots 
 5. **Data protection (revDSG, in force since 1 September 2023).** Listings can contain personal data (landlord names, phone numbers, addresses). Flatty follows proportionality and purpose limitation:
    - It doesn't store contact persons, phone numbers, e-mails or images. Agency company names and the public address are kept.
    - Listings that haven't been seen for 14 days are deleted automatically (`FLATTY_RETENTION_DAYS`).
-   - The student's profile isn't stored on the server. It is sent with each request to the back-end on the student's own machine.
+   - Without an account, the student's profile isn't stored. It is sent with each request and forgotten.
+   - With an account (added 15 November 2026), the back-end stores the student's e-mail address, a password hash, the profile and the saved homes, so that Flatty can remember them. This is the student's own choice, and "Delete account" erases all of it. A saved home is erased with its listing after 14 days offline. A saved pasted listing keeps its facts (title, rent, size, link, no description and no contact details) until the student removes it.
+
+## Private test
+
+The team can run Flatty from a team member's own computer and let a few invited testers reach it through a tunnel (`README.md`, "Hosting a private test"). The listings, the accounts and the models then stay on that computer, and only invited people can log in.
+
+This is not yet reviewed as a "hosted version". Two points are open and are the team's decision, not something the code settles:
+
+- **Uni Bern housing board.** Its legal notice asks for written consent before content is stored on other servers or fed into online services. On a team member's own computer the data doesn't move to another server, but testers do reach it online. On a rented server it clearly does move, so there the source must be switched off in `app/scraper/sources.py` until the Welcome Center has agreed.
+- **Accounts hold personal data.** Tell the testers what is stored (see above) before they sign up.
 
 ## What the code enforces
 
@@ -54,5 +64,5 @@ robots.txt alone doesn't decide the question. Homegate and WG-Zimmer allow bots 
 - [ ] Ask WG-Zimmer for consent.
 - [ ] Ask the Uni Bern Welcome Center for written consent for any hosted or public version.
 - [ ] Review the terms of newhome, comparis, students.ch and university housing boards before adding them.
-- [ ] Publish a privacy notice for students.
+- [ ] Publish a privacy notice for students. It must cover accounts: e-mail address, profile and saved homes.
 - [ ] Set `FLATTY_CONTACT` to a real team e-mail address.

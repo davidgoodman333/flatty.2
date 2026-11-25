@@ -5,6 +5,9 @@ export type ReasonIcon = "check" | "home" | "mail" | "map" | "search" | "shop" |
 
 export type Reason = { tone: "yes" | "warn"; icon: ReasonIcon; title: string; detail: string; share?: number };
 export type ReplyLevel = "likely" | "unlikely";
+// Who the landlord is looking for, read from the listing by the local LLM. fit: does the student
+// meet it (yes / no), or isn't it in the profile (unknown, so not part of the reply chance)?
+export type Wish = { topic: string; title: string; quote: string; strength: "required" | "preferred"; fit: "yes" | "no" | "unknown" };
 
 export type Photo = { thumb: string; full: string };
 
@@ -44,6 +47,7 @@ export type Apartment = {
   tags: string[];
   reasons: Reason[];
   notes?: Reason[];
+  wishes?: Wish[] | null; // null: not read yet
   riskFlags: string[];
   riskPositives?: string[];
   riskText?: number | null;
@@ -61,7 +65,10 @@ export type Filters = {
   maxRisk: number | null;
   rental: "any" | "permanent" | "temporary";
   withPhotos: boolean;
+  /** The student needs the home from this date (YYYY-MM-DD)… */
   availableBy: string | null;
+  /** …until this date. Empty means an open-ended stay. */
+  neededUntil: string | null;
   areaLat: number | null;
   areaLng: number | null;
   radiusKm: number;
@@ -69,7 +76,7 @@ export type Filters = {
 
 export const emptyFilters: Filters = {
   sources: [], priceMin: null, priceMax: null, roomsMin: null, surfaceMin: null, types: [], features: [],
-  maxRisk: null, rental: "any", withPhotos: false, availableBy: null, areaLat: null, areaLng: null, radiusKm: 2,
+  maxRisk: null, rental: "any", withPhotos: false, availableBy: null, neededUntil: null, areaLat: null, areaLng: null, radiusKm: 2,
 };
 
 export type SortKey = "reply" | "price_asc" | "price_desc" | "newest" | "risk" | "commute" | "size";
@@ -77,6 +84,8 @@ export type SortKey = "reply" | "price_asc" | "price_desc" | "newest" | "risk" |
 export type SourceInfo = { key: string; name: string; scraping_allowed: boolean; decision: string; terms: string; listings: number };
 
 export type Profile = {
+  /** Only used to sign application e-mails. */
+  name: string;
   languages: string[];
   budget: number;
   areas: string[];
@@ -113,13 +122,14 @@ export class ApiUnavailable extends Error {}
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "/api";
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+async function request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: unknown): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      method,
+      credentials: "same-origin", // sends the session cookie
+      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
     throw new ApiUnavailable("The Flatty back-end is not reachable.");
@@ -128,11 +138,68 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     throw new ApiUnavailable("The Flatty back-end is not running.");
   }
   const data = await response.json();
+  // Not past the developer password yet (app/site_gate.py): go to its password page, then back.
+  if (response.status === 401 && data?.detail?.code === "site_locked") {
+    window.location.assign(`/__gate?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+  }
   if (!response.ok) {
     const detail = typeof data.detail === "object" && data.detail ? data.detail : { code: "error", message: String(data.detail ?? "Something went wrong.") };
     throw new ApiError(response.status, detail.code ?? "error", detail.message ?? "Something went wrong.");
   }
   return data as T;
+}
+
+const post = <T,>(path: string, body: unknown) => request<T>("POST", path, body);
+
+// Accounts -----------------------------------------------------------------------------
+
+export type Account = { email: string; profile: Profile | null; filters: Filters | null; sort: SortKey | null };
+/** `private`: a private test, where everything needs a log-in. `siteGate`: the site is behind the developer
+ * password. `available`: the back-end is running. */
+export type Session = { user: Account | null; private: boolean; inviteRequired: boolean; siteGate?: boolean; available: boolean };
+export type SavedItem = { listing: Apartment; savedAt: string; available: boolean | null };
+
+type SessionResponse = Omit<Session, "available">;
+
+/** Who is logged in (from the session cookie). Without the back-end nobody is: demo mode. */
+export async function fetchSession(): Promise<Session> {
+  try {
+    return { ...(await request<SessionResponse>("GET", "/auth/me")), available: true };
+  } catch {
+    return { user: null, private: false, inviteRequired: false, available: false };
+  }
+}
+
+export async function logIn(email: string, password: string): Promise<Account> {
+  return (await post<SessionResponse>("/auth/login", { email, password })).user as Account;
+}
+
+export async function register(email: string, password: string, inviteCode: string): Promise<Account> {
+  return (await post<SessionResponse>("/auth/register", { email, password, inviteCode })).user as Account;
+}
+
+export async function logOut(): Promise<void> {
+  await post("/auth/logout", {});
+}
+
+export async function deleteAccount(): Promise<void> {
+  await post("/auth/delete-account", {});
+}
+
+export async function savePreferences(profile: Profile, filters: Filters, sort: SortKey): Promise<void> {
+  await request("PUT", "/account/preferences", { profile, filters, sort });
+}
+
+export async function fetchSaved(): Promise<SavedItem[]> {
+  return (await request<{ items: SavedItem[] }>("GET", "/saved")).items;
+}
+
+export async function saveListing(listing: Apartment): Promise<void> {
+  await post("/saved", { listing });
+}
+
+export async function unsaveListing(id: string): Promise<void> {
+  await request("DELETE", `/saved?id=${encodeURIComponent(id)}`);
 }
 
 export const PAGE_SIZE = 30;
@@ -153,7 +220,7 @@ export async function matchListings(profile: Profile, filters: Filters, sort: So
 /** Asks the back-end to check (at most once an hour) that the listing is still online at its source. */
 export async function checkListingOnline(id: string): Promise<ListingStatus> {
   try {
-    const response = await fetch(`${API_BASE}/listings/${encodeURIComponent(id)}/check`);
+    const response = await fetch(`${API_BASE}/listings/${encodeURIComponent(id)}/check`, { credentials: "same-origin" });
     if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) {
       return { available: null };
     }
@@ -165,7 +232,7 @@ export async function checkListingOnline(id: string): Promise<ListingStatus> {
 
 export async function fetchSources(): Promise<SourceInfo[]> {
   try {
-    const response = await fetch(`${API_BASE}/sources`);
+    const response = await fetch(`${API_BASE}/sources`, { credentials: "same-origin" });
     if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) return [];
     return (await response.json()) as SourceInfo[];
   } catch {
@@ -178,8 +245,11 @@ export async function checkLink(profile: Profile, input: { url?: string; text?: 
   return data.listing;
 }
 
-export async function generateText(kind: "email" | "summary", listing: Apartment, profile: Profile) {
-  return post<{ text: string; engine: string }>("/generate", { kind, listing, profile });
+export type EmailLanguage = "English" | "German";
+
+/** `language` only matters for e-mails; without it the back-end picks the listing's language. */
+export async function generateText(kind: "email" | "summary", listing: Apartment, profile: Profile, language?: EmailLanguage) {
+  return post<{ text: string; engine: string }>("/generate", { kind, listing, profile, language });
 }
 
 export async function translateTitle(title: string): Promise<{ title: string; originalTitle: string; engine: string }> {

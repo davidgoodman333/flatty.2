@@ -26,16 +26,18 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 
 from ..config import MODEL_DIR
+from ..rules import REPLY, RISK
 from ..text import red_flags
 from .features import QUALITY_FEATURES, TEXT_FLAGS, description_length, listing_text, quality_features, text_flag_vector
 
 RISK_PATH = MODEL_DIR / "risk_model.joblib"
 QUALITY_PATH = MODEL_DIR / "quality_model.joblib"
 
-# Assumed share of scams among listings when there is no evidence either way.
-BASE_RATE = 0.06
-# Characters of description needed before the text model's verdict counts fully.
-FULL_TEXT_EVIDENCE = 300
+# rules.toml [risk]: assumed share of scams without evidence; characters of description needed
+# before the text model's verdict counts fully; weight of the red-flag phrases in the text model.
+BASE_RATE = RISK["base_rate"]
+FULL_TEXT_EVIDENCE = RISK["full_text_evidence"]
+RED_FLAG_SCALE = RISK["red_flag_scale"]
 
 
 def sigmoid(x: float) -> float:
@@ -60,7 +62,7 @@ class RiskModel:
         texts = [listing_text(l) for l in listings]
         text_part = self.vectorizer.fit_transform(texts) if fit else self.vectorizer.transform(texts)
         # Red-flag phrases are weighted up so that they, not writing style, drive the verdict.
-        flags = csr_matrix(np.array([text_flag_vector(l) for l in listings]) * 2.0)
+        flags = csr_matrix(np.array([text_flag_vector(l) for l in listings]) * RED_FLAG_SCALE)
         return hstack([text_part, flags]).tocsr()
 
     def fit(self, listings: list[dict], labels: list[int]) -> "RiskModel":
@@ -73,17 +75,18 @@ class RiskModel:
         return self.classifier.predict_proba(self._matrix(listings))[:, 1].tolist()
 
     def flag_weights(self) -> dict[str, float]:
-        return dict(zip(TEXT_FLAGS, self.classifier.coef_[0][-len(TEXT_FLAGS):] * 2.0))
+        return dict(zip(TEXT_FLAGS, self.classifier.coef_[0][-len(TEXT_FLAGS):] * RED_FLAG_SCALE))
 
     def save(self) -> None:
         joblib.dump(self, RISK_PATH)
 
 
 def fallback_text_probability(listing: dict) -> float:
-    """Used only before the first training run: red-flag phrases with fixed weights."""
+    """Used only before the first training run: red-flag phrases with fixed weights (rules.toml
+    [risk.text_fallback])."""
+    weights = RISK["text_fallback"]
     flags = dict(zip(TEXT_FLAGS, text_flag_vector(listing)))
-    score = -3.0 + 1.6 * (flags["deposit_before_viewing"] + flags["no_viewing"] + flags["payment_service"])
-    return sigmoid(score + 1.0 * flags["off_platform_contact"] + 0.6 * flags["urgency"])
+    return sigmoid(weights["bias"] + sum(weights.get(flag, 0.0) * value for flag, value in flags.items()))
 
 
 def combine(text_probability: float, listing: dict, signals: list[tuple[str, str, float]]) -> dict:
@@ -102,29 +105,16 @@ def combine(text_probability: float, listing: dict, signals: list[tuple[str, str
     }
 
 
-# Prior weights for the quality model (log-odds). They encode the pitch's assumptions:
-# private landlords, student-friendly and furnished/temporary offers reply more often; cheap
-# listings get flooded with applications; local credentials and a guarantor help.
-QUALITY_PRIOR = {
-    "bias": -0.6,
-    "private_landlord": 0.6,
-    "mentions_students": 0.7,
-    "shared_flat": 0.5,
-    "furnished_or_temporary": 0.4,
-    "cheap_for_market": -0.6,
-    "expensive_for_market": 0.3,
-    "language_barrier": -0.7,
-    "has_permit": 0.5,
-    "has_swiss_phone": 0.3,
-    "has_swiss_bank": 0.3,
-    "has_guarantor": 0.6,
-    "has_viewing_person": 0.5,
-}
+# Prior weights for the quality model (log-odds): rules.toml [reply] and [reply.factors]. They
+# encode the team's assumptions until real reply labels exist.
+QUALITY_PRIOR = {"bias": REPLY["bias"], **{name: rule["weight"] for name, rule in REPLY["factors"].items()}}
 
 
 class QualityModel:
     def __init__(self):
         self.trained = joblib.load(QUALITY_PATH) if QUALITY_PATH.exists() else None
+        if self.trained and self.trained["model"].coef_.shape[1] != len(QUALITY_FEATURES):
+            self.trained = None  # trained before features were added: use the prior until it's retrained
         self.version = self.trained["version"] if self.trained else "quality-prior-v0"
 
     def weights(self) -> dict[str, float]:

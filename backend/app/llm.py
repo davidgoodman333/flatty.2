@@ -12,6 +12,7 @@ except ImportError:
     httpx = None
 
 from .config import OLLAMA_MODEL, OLLAMA_URL
+from .geo import school_name
 from .translations import is_already_english, translate_property_title
 
 _TRANSLATION_CACHE: dict[str, str] = {}
@@ -87,6 +88,31 @@ def translate_title(title: str) -> str:
     return translated
 
 
+_QUICK_CACHE: dict[str, str] = {}
+
+
+def quick_title(title: str | None) -> str:
+    """Instant English title for lists: the glossary, never the LLM (a search shows hundreds of
+    listings, and one LLM call per title would block it for minutes)."""
+    clean = (title or "").strip()
+    if clean not in _QUICK_CACHE:
+        _QUICK_CACHE[clean] = clean if not clean or is_english_title(clean) else fallback_translate_title(clean)
+    return _QUICK_CACHE[clean]
+
+
+def best_title(title: str) -> str | None:
+    """LLM translation of one title for the background worker (app/llm_worker.py).
+    None means Ollama can't be reached right now, so the worker should try again later."""
+    clean = title.strip()
+    if is_english_title(clean):
+        return clean
+    try:
+        translated = _translate_title_llm(clean)
+    except Exception:
+        return None
+    return translated if translated and len(translated) <= len(clean) * 3 else fallback_translate_title(clean)
+
+
 def available() -> bool:
     if httpx is None:
         return False
@@ -115,37 +141,133 @@ def _chat(system: str, user: str) -> str:
     text = response.json()["message"]["content"]
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     text = re.sub(r"^\s*\[[^\]]{1,40}\]\s*$", "", text, flags=re.MULTILINE)  # drop "[Name]"-style lines
+    text = re.sub(r"[ \t]+$", "", text, flags=re.MULTILINE)  # Markdown line breaks ("  ") at line ends
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def _natural(items: list[str]) -> str:
+def _natural(items: list[str], german: bool = False) -> str:
     items = [item for item in items if item]
-    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}" if items else ""
+    joiner = " und " if german else " and "
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])}{joiner}{items[-1]}" if items else ""
 
 
-def _profile_facts(profile: dict) -> list[str]:
+EMAIL_LANGUAGES = ("English", "German")
+GREETING = {"English": "Hello,", "German": "Guten Tag"}
+CLOSING = {"English": "Kind regards", "German": "Freundliche Grüsse"}
+# The request for a viewing is fixed: the small local model sometimes garbles this sentence in German.
+VIEWING = {
+    "English": "I would be glad to come for a viewing and can send you my documents.",
+    "German": "Gerne komme ich für eine Besichtigung vorbei und sende Ihnen meine Unterlagen.",
+}
+CLOSING_LINE = re.compile(
+    r"\s*(kind regards|best regards|warm regards|regards|sincerely|yours sincerely|yours faithfully|"
+    r"freundliche gr[üu]sse|mit freundlichen gr[üu]ssen|beste gr[üu]sse|liebe gr[üu]sse|herzliche gr[üu]sse)\b",
+    re.IGNORECASE,
+)
+
+LANGUAGES_DE = {
+    "English": "Englisch", "German": "Deutsch", "French": "Französisch", "Italian": "Italienisch",
+    "Albanian": "Albanisch", "Arabic": "Arabisch", "Bengali": "Bengalisch", "Bosnian": "Bosnisch",
+    "Bulgarian": "Bulgarisch", "Croatian": "Kroatisch", "Czech": "Tschechisch", "Danish": "Dänisch",
+    "Dutch": "Niederländisch", "Finnish": "Finnisch", "Greek": "Griechisch", "Hebrew": "Hebräisch",
+    "Hindi": "Hindi", "Hungarian": "Ungarisch", "Indonesian": "Indonesisch", "Japanese": "Japanisch",
+    "Korean": "Koreanisch", "Mandarin": "Mandarin", "Norwegian": "Norwegisch", "Persian": "Persisch",
+    "Polish": "Polnisch", "Portuguese": "Portugiesisch", "Romanian": "Rumänisch", "Russian": "Russisch",
+    "Serbian": "Serbisch", "Slovak": "Slowakisch", "Spanish": "Spanisch", "Swedish": "Schwedisch",
+    "Tamil": "Tamil", "Thai": "Thailändisch", "Turkish": "Türkisch", "Ukrainian": "Ukrainisch",
+    "Urdu": "Urdu", "Vietnamese": "Vietnamesisch",
+}
+
+# "Ich komme …" for the German template (used only when Ollama is off). German needs the
+# right article, so countries that aren't listed are simply left out of the sentence.
+ORIGIN_DE = {
+    "Switzerland": "aus der Schweiz", "Germany": "aus Deutschland", "Austria": "aus Österreich",
+    "France": "aus Frankreich", "Italy": "aus Italien", "Spain": "aus Spanien", "Portugal": "aus Portugal",
+    "United Kingdom": "aus Grossbritannien", "Ireland": "aus Irland", "Netherlands": "aus den Niederlanden",
+    "Belgium": "aus Belgien", "Luxembourg": "aus Luxemburg", "Liechtenstein": "aus Liechtenstein",
+    "Denmark": "aus Dänemark", "Sweden": "aus Schweden", "Norway": "aus Norwegen", "Finland": "aus Finnland",
+    "Iceland": "aus Island", "Poland": "aus Polen", "Czechia": "aus Tschechien", "Slovakia": "aus der Slowakei",
+    "Hungary": "aus Ungarn", "Romania": "aus Rumänien", "Bulgaria": "aus Bulgarien", "Greece": "aus Griechenland",
+    "Croatia": "aus Kroatien", "Slovenia": "aus Slowenien", "Serbia": "aus Serbien",
+    "Bosnia and Herzegovina": "aus Bosnien und Herzegowina", "Montenegro": "aus Montenegro",
+    "North Macedonia": "aus Nordmazedonien", "Albania": "aus Albanien", "Kosovo": "aus dem Kosovo",
+    "Ukraine": "aus der Ukraine", "Russia": "aus Russland", "Belarus": "aus Belarus", "Moldova": "aus Moldau",
+    "Estonia": "aus Estland", "Latvia": "aus Lettland", "Lithuania": "aus Litauen", "Turkey": "aus der Türkei",
+    "Cyprus": "aus Zypern", "Malta": "aus Malta", "Georgia": "aus Georgien", "Armenia": "aus Armenien",
+    "United States": "aus den USA", "Canada": "aus Kanada", "Mexico": "aus Mexiko", "Brazil": "aus Brasilien",
+    "Argentina": "aus Argentinien", "Chile": "aus Chile", "Colombia": "aus Kolumbien", "Peru": "aus Peru",
+    "China": "aus China", "India": "aus Indien", "Japan": "aus Japan", "South Korea": "aus Südkorea",
+    "Taiwan": "aus Taiwan", "Hong Kong": "aus Hongkong", "Singapore": "aus Singapur", "Vietnam": "aus Vietnam",
+    "Thailand": "aus Thailand", "Indonesia": "aus Indonesien", "Malaysia": "aus Malaysia",
+    "Philippines": "von den Philippinen", "Pakistan": "aus Pakistan", "Bangladesh": "aus Bangladesch",
+    "Sri Lanka": "aus Sri Lanka", "Nepal": "aus Nepal", "Iran": "aus dem Iran", "Iraq": "aus dem Irak",
+    "Israel": "aus Israel", "Lebanon": "aus dem Libanon", "Syria": "aus Syrien", "Egypt": "aus Ägypten",
+    "Morocco": "aus Marokko", "Tunisia": "aus Tunesien", "Algeria": "aus Algerien", "Nigeria": "aus Nigeria",
+    "Ghana": "aus Ghana", "Kenya": "aus Kenia", "Ethiopia": "aus Äthiopien", "South Africa": "aus Südafrika",
+    "Australia": "aus Australien", "New Zealand": "aus Neuseeland",
+}
+
+FIRST_PERSON = {
+    "English": {
+        "hasGuarantor": "I have a guarantor who lives in Switzerland.",
+        "hasViewingPerson": "Someone can attend a viewing on my behalf.",
+        "hasResidencePermit": "I have a Swiss residence permit.",
+        "hasSwissBank": "I have a Swiss bank account.",
+        "hasSwissNumber": "I have a Swiss phone number.",
+    },
+    "German": {
+        "hasGuarantor": "Eine Person mit Wohnsitz in der Schweiz bürgt für mich.",
+        "hasViewingPerson": "Eine Vertrauensperson kann die Wohnung an meiner Stelle besichtigen.",
+        "hasResidencePermit": "Ich habe eine Schweizer Aufenthaltsbewilligung.",
+        "hasSwissBank": "Ich habe ein Schweizer Bankkonto.",
+        "hasSwissNumber": "Ich habe eine Schweizer Telefonnummer.",
+    },
+}
+
+
+def _name(profile: dict) -> str:
+    return " ".join((profile.get("name") or "").split())[:80]
+
+
+def _country(profile: dict) -> str:
+    country = (profile.get("country") or "").strip()
+    return "" if country == "Other" else country
+
+
+def _profile_facts(profile: dict, german: bool = False) -> list[str]:
+    school = school_name(profile.get("destination"), german)
+    if german:
+        school = re.sub(r"^(an der|am)\s+", "", school)  # the bare name; the model adds the preposition
     facts = [
-        f"From: {profile.get('country') or 'not given'}",
-        f"Studies or works at: {profile.get('destination') or 'not given'}",
-        f"Speaks: {_natural(profile.get('languages') or ['English'])}",
-        f"Looking for: {_natural([t.lower() for t in profile.get('apartmentTypes') or []]) or 'a flat'}",
+        f"Name: {_name(profile)}" if _name(profile) else "",
+        f"From: {_country(profile)}" if _country(profile) else "",
+        f"Studies at: {school}" if school else "Studies in Bern",
+        f"Languages: {_natural(profile.get('languages') or ['English'])}",
     ]
     for key, label in (
-        ("hasGuarantor", "Has a guarantor living in Switzerland"),
-        ("hasViewingPerson", "Has someone who can attend viewings on their behalf"),
-        ("hasResidencePermit", "Has a Swiss residence permit"),
-        ("hasSwissBank", "Has a Swiss bank account"),
-        ("hasSwissNumber", "Has a Swiss phone number"),
+        ("hasGuarantor", "Guarantor living in Switzerland: yes"),
+        ("hasViewingPerson", "Someone who can attend viewings on the applicant's behalf: yes"),
+        ("hasResidencePermit", "Swiss residence permit: yes"),
+        ("hasSwissBank", "Swiss bank account: yes"),
+        ("hasSwissNumber", "Swiss phone number: yes"),
     ):
         if profile.get(key) == "yes":
             facts.append(label)
-    return facts
+    return [fact for fact in facts if fact]
 
 
-def _listing_facts(listing: dict) -> str:
+def _email_title(listing: dict, language: str) -> str:
+    """The landlord's own title for a German e-mail, the English one otherwise."""
+    return (listing.get("originalTitle") or listing.get("title")) if language == "German" else listing.get("title")
+
+
+def _listing_facts(listing: dict, email_language: str | None = None) -> str:
     title = listing.get("title")
     orig = listing.get("originalTitle")
-    title_line = f"Title: {title} (Original listing title: {orig})" if orig and orig != title else f"Title: {title}"
+    if email_language:
+        title_line = f"Title: {_email_title(listing, email_language)}"
+    else:
+        title_line = f"Title: {title} (Original listing title: {orig})" if orig and orig != title else f"Title: {title}"
     return (
         f"{title_line}\nArea: {listing.get('area')}, {listing.get('city') or 'Bern'}\n"
         f"Rent: {listing.get('rent')} per month\nSize: {listing.get('meta')}\n"
@@ -154,37 +276,58 @@ def _listing_facts(listing: dict) -> str:
 
 
 def email_language(listing: dict, profile: dict) -> str:
-    language = listing.get("language")
-    return language if language in (profile.get("languages") or []) else "English"
+    """Default e-mail language: the listing's, if it is German; otherwise English."""
+    return "German" if listing.get("language") == "German" else "English"
 
 
-FIRST_PERSON = {
-    "hasGuarantor": "I have a guarantor who lives in Switzerland.",
-    "hasViewingPerson": "Someone can attend a viewing on my behalf.",
-    "hasResidencePermit": "I have a Swiss residence permit.",
-    "hasSwissBank": "I have a Swiss bank account.",
-    "hasSwissNumber": "I have a Swiss phone number.",
-}
+def sign(text: str, language: str, name: str) -> str:
+    """End the e-mail with the standard closing and the student's name, replacing whatever
+    the model wrote there (it sometimes invents a name or leaves a placeholder)."""
+    lines = text.rstrip().splitlines()
+    for index in range(len(lines) - 1, max(len(lines) - 6, -1), -1):
+        if CLOSING_LINE.match(lines[index]):
+            lines = lines[:index]
+            break
+    body = "\n".join(lines).rstrip()
+    return f"{body}\n\n{CLOSING[language]}" + (f"\n{name}" if name else "")
 
 
-def template_email(listing: dict, profile: dict) -> str:
-    extras = [sentence for key, sentence in FIRST_PERSON.items() if profile.get(key) == "yes"]
-    # Reference the landlord's original listing title if German, otherwise the translated title
-    lang = email_language(listing, profile)
-    ref_title = (listing.get("originalTitle") or listing.get("title")) if lang == "German" else listing.get("title")
+def template_email(listing: dict, profile: dict, language: str | None = None) -> str:
+    language = language if language in EMAIL_LANGUAGES else email_language(listing, profile)
+    german = language == "German"
+    name, country = _name(profile), _country(profile)
+    school = school_name(profile.get("destination"), german)
+    extras = [sentence for key, sentence in FIRST_PERSON[language].items() if profile.get(key) == "yes"]
+    speaks = profile.get("languages") or ["English"]
+    title = _email_title(listing, language)
+    if german:
+        origin = ORIGIN_DE.get(country, "")
+        study = f"studiere {school}" if school else "studiere in Bern"
+        intro = [
+            f"Ich interessiere mich für Ihr Inserat «{title}» ({listing.get('area')}).",
+            f"Ich heisse {name}." if name else "",
+            f"Ich komme {origin} und {study}." if origin else f"Ich {study}.",
+        ]
+        about = f"Ich spreche {_natural([LANGUAGES_DE.get(item, item) for item in speaks], german=True)}."
+        ask = VIEWING[language]
+    else:
+        study = f"study at {school}" if school else "study in Bern"
+        intro = [
+            f"I am interested in your listing “{title}” in {listing.get('area')}.",
+            f"My name is {name}." if name else "",
+            f"I am from {country} and {study}." if country else f"I {study}.",
+        ]
+        about = f"I speak {_natural(speaks)}."
+        ask = VIEWING[language]
     lines = [
-        "Hello,",
+        GREETING[language],
         "",
-        f"I am interested in your listing “{ref_title}” in {listing.get('area')}. "
-        f"I am from {profile.get('country') or 'abroad'} and study or work at {profile.get('destination') or 'a university in Bern'}.",
+        " ".join(sentence for sentence in intro if sentence),
         "",
-        f"I speak {_natural(profile.get('languages') or ['English'])}."
-        + (" " + " ".join(extras) if extras else ""),
-        "I would be happy to send my documents and to arrange a viewing.",
-        "",
-        "Kind regards",
+        " ".join([about, *extras]),
+        ask,
     ]
-    return "\n".join(lines)
+    return sign("\n".join(lines), language, name)
 
 
 def template_summary(listing: dict) -> str:
@@ -198,29 +341,47 @@ def template_summary(listing: dict) -> str:
     )
 
 
-def generate(kind: str, listing: dict, profile: dict) -> dict:
+def generate(kind: str, listing: dict, profile: dict, language: str | None = None) -> dict:
+    """E-mails come in English or German (`language`; default: the listing's language if it is
+    German, otherwise English). The reply says which language was written."""
     if kind in ("title", "translate"):
         orig = listing.get("originalTitle") or listing.get("title") or ""
         trans = translate_title(orig)
         engine = OLLAMA_MODEL if available() else "template"
         return {"text": trans, "engine": engine}
 
-    fallback = template_email(listing, profile) if kind == "email" else template_summary(listing)
+    if kind == "email":
+        language = language if language in EMAIL_LANGUAGES else email_language(listing, profile)
+        fallback = {"text": template_email(listing, profile, language), "engine": "template", "language": language}
+    else:
+        fallback = {"text": template_summary(listing), "engine": "template"}
     if not available():
-        return {"text": fallback, "engine": "template"}
+        return fallback
 
     if kind == "email":
-        language = email_language(listing, profile)
+        german = language == "German"
+        name = _name(profile)
         system = (
             "You write short, polite rental application e-mails for international students in Bern, Switzerland. "
-            f"Write in {language}" + (" (Swiss Standard German: write 'ss', never 'ß')" if language == "German" else "") + ". "
-            "Structure: greeting; one sentence saying you are interested in this specific listing (name its title and area); "
-            "two or three sentences introducing the applicant using only the applicant facts; one sentence asking for a viewing "
-            "and offering to send documents; a closing such as 'Kind regards' with no name after it. "
-            "Never invent documents, income, names, dates or facts. No subject line, no placeholders in brackets. "
-            "Maximum 130 words. Plain text."
+            "The applicant sends the e-mail themselves, so write it in the first person ('I'), never about the applicant "
+            "in the third person, and never guess the applicant's gender. "
+            f"Write in {language}"
+            + (" (Swiss Standard German: write 'ss', never 'ß'; address the landlord formally with 'Sie')" if german else "") + ". "
+            f"Structure: the greeting '{GREETING[language]}'; one sentence saying you are interested in this specific listing "
+            "(name its title and area); one to three sentences introducing the applicant that state the applicant facts and nothing else"
+            + (", beginning with their name" if name else "") + f"; then exactly this sentence as its own paragraph: '{VIEWING[language]}'; "
+            f"then the closing line '{CLOSING[language]}'. Write nothing after the closing line: no name, no signature. "
+            "Use every applicant fact once. If there are only a few facts, keep the e-mail short: never add wishes, "
+            "preferences, flatmates, hobbies, language skills or anything else that is not in the facts. "
+            "Never invent documents, income, names, dates or facts, and do not suggest a day or time for the viewing. "
+            + ("Write 'Ich studiere an …', never 'Student' or 'Studentin'. " if german else "Write 'I study at …'. ")
+            + "No subject line, no placeholders in brackets. Put an empty line between the greeting, each paragraph and "
+            "the closing. Maximum 130 words. Plain text."
         )
-        user = f"Listing:\n{_listing_facts(listing)}\n\nApplicant:\n" + "\n".join(f"- {fact}" for fact in _profile_facts(profile))
+        user = (
+            f"Listing:\n{_listing_facts(listing, language)}\n\nApplicant:\n"
+            + "\n".join(f"- {fact}" for fact in _profile_facts(profile, german))
+        )
     else:
         system = (
             "You summarise apartment listings for international students in Bern. English, plain text, "
@@ -235,8 +396,10 @@ def generate(kind: str, listing: dict, profile: dict) -> dict:
         )
     try:
         text = _chat(system, user)
-        if kind == "email" and language == "German":
-            text = text.replace("ß", "ss")  # Swiss Standard German
-        return {"text": text, "engine": OLLAMA_MODEL}
     except (httpx.HTTPError, KeyError, ValueError):
-        return {"text": fallback, "engine": "template"}
+        return fallback
+    if kind != "email":
+        return {"text": text, "engine": OLLAMA_MODEL}
+    if german:
+        text = text.replace("ß", "ss")  # Swiss Standard German
+    return {"text": sign(text, language, name), "engine": OLLAMA_MODEL, "language": language}

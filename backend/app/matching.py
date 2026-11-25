@@ -14,12 +14,15 @@ import re
 from datetime import datetime
 
 from . import llm
+from .dates import fits_period
 from .geo import commute_minutes, distance_km, neighbourhood, resolve_destination
 from .kinds import APARTMENT, HOUSE, ROOM, STUDIO, classify
 from .ml.features import is_shared
 from .ml.models import QualityModel
+from .rules import REPLY
 from .scraper.sources import SOURCES
 from .text import FLAG_LABELS, detect_language
+from .wishes import assess as assess_wishes
 
 SOURCE_NAMES = {source.key: source.name for source in SOURCES}
 
@@ -48,26 +51,12 @@ def in_wanted_area(area: str, city: str, wanted: list[str]) -> bool | None:
     return any(item.lower() in {area.lower(), (city or "").lower()} for item in wanted)
 
 
-# What each reply-likelihood feature means for the student: (icon, title, detail).
-# Whether it helps or hurts comes from the sign of the model's weight for that feature.
-REPLY_FACTORS = {
-    "private_landlord": ("home", "Private landlord", "Private landlords reply to students more often than agencies"),
-    "mentions_students": ("work", "Student-friendly", "The listing mentions students"),
-    "shared_flat": ("home", "Room in a shared flat", "Shared flats are often let to students"),
-    "furnished_or_temporary": ("home", "Furnished or temporary", "Aimed at people who are new in town"),
-    "cheap_for_market": ("search", "Cheap for the area", "Expect many other applicants"),
-    "expensive_for_market": ("search", "Rent above the usual level", "Fewer people apply for expensive listings"),
-    "language_barrier": ("mail", "Listing in a language you don't speak", "Your reply chances improve if you answer in the listing's language"),
-    "has_permit": ("check", "You have a residence permit", "Landlords often ask for one"),
-    "has_swiss_phone": ("check", "You have a Swiss phone number", "Landlords can reach you easily"),
-    "has_swiss_bank": ("check", "You have a Swiss bank account", "Rent and deposit are simple to arrange"),
-    "has_guarantor": ("check", "You have a guarantor in Switzerland", "This lowers the landlord's risk"),
-    "has_viewing_person": ("check", "Someone can attend viewings for you", "You can react to viewing dates quickly"),
-}
+# What each reply-likelihood feature means for the student: (icon, title, detail), from
+# rules.toml [reply.factors]. Whether it helps or hurts comes from the sign of its weight.
+REPLY_FACTORS = {name: (rule["icon"], rule["title"], rule["detail"]) for name, rule in REPLY["factors"].items()}
 
-
-# Reply likelihood shown to the student: "likely" means more likely than not.
-LIKELY_FROM = 0.5
+# Reply likelihood shown to the student: "likely" from this probability on (rules.toml).
+LIKELY_FROM = REPLY["likely_from"]
 
 
 def reply_level(probability: float) -> tuple[str, str]:
@@ -87,21 +76,25 @@ def shares(weights: list[float]) -> list[int]:
     return result
 
 
-def reply_reasons(features: dict[str, float], weights: dict[str, float], language: str) -> list[dict]:
+def reply_reasons(features: dict[str, float], weights: dict[str, float], language: str,
+                  overrides: dict[str, tuple[str, str]] | None = None) -> list[dict]:
     """The facts behind the reply likelihood, strongest first.
 
     `share` is how much each fact counts towards the score, as a percentage of all facts that
     apply (they add up to 100); `tone` says whether it raises ("yes") or lowers ("warn") it.
+    A fact counts with its weight times its value (a preferred wish counts 0.6, a required one 1).
     """
-    active = [name for name in sorted(features, key=lambda name: -abs(weights.get(name, 0)))
-              if features[name] and weights.get(name, 0)]
+    contribution = {name: weights.get(name, 0) * value for name, value in features.items()}
+    active = [name for name in sorted(features, key=lambda name: -abs(contribution[name])) if contribution[name]]
     reasons = []
-    for name, share in zip(active, shares([weights[name] for name in active])):
+    for name, share in zip(active, shares([contribution[name] for name in active])):
         icon, title, detail = REPLY_FACTORS[name]
         if name == "language_barrier":
             title = f"Listing written in {language}"
+        if overrides and name in overrides:
+            title, detail = overrides[name]
         reasons.append({
-            "tone": "yes" if weights[name] > 0 else "warn", "icon": icon, "title": title, "detail": detail,
+            "tone": "yes" if contribution[name] > 0 else "warn", "icon": icon, "title": title, "detail": detail,
             "share": share,
         })
     return reasons
@@ -124,7 +117,8 @@ def card(listing: dict, profile: dict, market: dict, quality_model: QualityModel
     risk = round(100 * (listing.get("risk_score") or 0))
 
     # Why the reply likelihood is what it is.
-    reasons = reply_reasons(quality_features, quality_model.weights(), language)
+    wishes = assess_wishes(listing.get("wishes"), profile)
+    reasons = reply_reasons(quality_features, quality_model.weights(), language, wishes["overrides"])
 
     # How the listing compares with what the student asked for. Not part of any score.
     notes = []
@@ -162,10 +156,9 @@ def card(listing: dict, profile: dict, market: dict, quality_model: QualityModel
     tags.append("Private landlord" if listing.get("is_private") else (listing.get("agency") or "Agency"))
 
     original_title = listing.get("title") or _type_label(listing)
-    title_en = listing.get("title_en")
-    if not title_en and original_title:
-        title_en = llm.translate_title(original_title)
-        listing["title_en"] = title_en
+    # Stored LLM translation if there is one, otherwise the instant glossary translation.
+    # Never call the LLM here: this runs for every listing on every search.
+    title_en = listing.get("title_en") or llm.quick_title(original_title)
 
     features = list(listing.get("attributes") or [])
     if listing.get("is_furnished"):
@@ -206,6 +199,8 @@ def card(listing: dict, profile: dict, market: dict, quality_model: QualityModel
         "movingDate": listing.get("moving_date"),
         "tags": tags[:3],
         "reasons": reasons,  # all of them, so the shares add up to 100
+        # Who the landlord is looking for, as read by the local LLM. None = not read yet.
+        "wishes": wishes["shown"] if listing.get("wishes") is not None else None,
         "notes": notes[:5],
         **risk_explanation(listing),
         "modelVersion": {"risk": listing.get("model_version"), "quality": quality_model.version},
@@ -280,7 +275,9 @@ def passes(c: dict, filters: dict, ignore_source: bool = False) -> bool:
         return False
     if filters.get("withPhotos") and not c["images"]:
         return False
-    if filters.get("availableBy") and c["movingDate"] and c["movingDate"] > filters["availableBy"]:
+    # The period the student needs the home for: availableBy = from, neededUntil = until.
+    needed_from, needed_until = filters.get("availableBy"), filters.get("neededUntil")
+    if (needed_from or needed_until) and not fits_period(c["movingDate"], c["availableText"], needed_from, needed_until):
         return False
     if filters.get("areaLat") is not None and filters.get("areaLng") is not None:
         if c["lat"] is None or c["lng"] is None:
