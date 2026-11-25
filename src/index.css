@@ -628,3 +628,70 @@ h1, h2, p { margin: 0; }
   .tabs button { padding: 13px 10px; font-size: 13px; }.tabs button > svg { display: none; }
   .tree-root { align-items: center; }
 }
+
+
+/* ---------------------------------------------------------------------------------------
+   Phones and tablets. Desktop (wide screen, mouse) is the reference design and is unchanged.
+   --------------------------------------------------------------------------------------- */
+
+/* Top bar menu: on wide screens its links show inline, in the original order. */
+.menu-toggle, .menu-backdrop { display: none; }
+.topbar-menu { display: contents; }
+.topbar-actions .menu-about { order: -1; }   /* "How it works" before "Edit profile", as before */
+
+/* Mobile browsers: the visible height without the address bar. */
+.app-shell, .welcome-page { min-height: 100svh; }
+
+@media (max-width: 640px) {
+  .topbar { position: relative; z-index: 30; }
+  .topbar-actions { gap: 6px; }
+  .topbar-actions .menu-about { order: 0; }
+  .menu-toggle {
+    display: grid; width: 44px; height: 44px; place-items: center; margin-right: -10px;
+    border: 0; background: none; color: #4c2730;
+  }
+  .menu-lines { display: grid; gap: 4px; width: 20px; }
+  .menu-lines i { display: block; height: 2px; background: currentColor; }
+  .topbar-menu {
+    position: absolute; top: 100%; right: 0; left: 0; z-index: 31;
+    display: none; flex-direction: column; padding: 6px 18px 12px;
+    border-bottom: 1px solid #ead9d5; background: #fff9f3; box-shadow: 0 12px 24px rgba(76, 39, 48, .08);
+  }
+  .topbar-actions.open .topbar-menu { display: flex; }
+  .topbar-menu .topbar-link {
+    display: flex; align-items: center; width: 100%; min-height: 48px; padding: 0 2px;
+    border-bottom: 1px solid #f0e4e1; color: #4c2730; font-size: 16px; text-align: left;
+  }
+  .topbar-menu .topbar-link:last-child { border-bottom: 0; }
+  .menu-backdrop { position: fixed; inset: 72px 0 0; z-index: 29; display: block; border: 0; background: rgba(76, 39, 48, .12); }
+  .edit-button { display: flex; align-items: center; min-height: 44px; font-size: 14px; }
+
+  /* Step 1: the budget label stays on one line. */
+  .label-row { flex-wrap: wrap; gap: 4px 12px; }
+  .label-row strong { font-size: 16px; white-space: nowrap; }
+
+  .setup-privacy { font-size: 12px; }
+  .onboarding-actions { padding-bottom: max(17px, env(safe-area-inset-bottom)); }
+  .drawer-foot { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+  .step-missing { text-align: left; }
+}
+
+/* Phones: iOS Safari zooms into any text field under 16px when it's tapped. */
+@media (max-width: 760px) {
+  input:not([type="range"]):not([type="checkbox"]):not([type="radio"]), select, textarea { font-size: 16px; }
+  .sort-select { height: 44px; }
+}
+
+/* Touch screens (phones and tablets): everything tappable is at least 44px. */
+@media (pointer: coarse) {
+  .chip, .filter-group .chip, .drawer-section .chip { min-height: 44px; }
+  .binary-choice, .drawer-question .binary-choice { min-width: 72px; height: 44px; }
+  .back-button, .back-link { min-height: 44px; }
+  .save-button { width: 44px; height: 44px; }
+  .filter-toggle, .sort-select { min-height: 44px; }
+  .topbar-link, .edit-button { display: inline-flex; align-items: center; min-height: 44px; }
+  .map-link { padding: 12px 0; }
+  .brand, .apartment-action button, .drawer-account button, .drawer-restart, .login-switch button { min-height: 44px; }
+  .drawer-input button { min-width: 44px; min-height: 44px; }
+  .text-input input { align-self: stretch; min-height: 44px; }
+}

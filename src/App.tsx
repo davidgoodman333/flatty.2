@@ -130,6 +130,8 @@ export default function App() {
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [showPreferences, setShowPreferences] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false); // the top bar's menu on phones
+  useEffect(() => setMenuOpen(false), [screen]);
   const [notice, setNotice] = useState("");
   const [listingStatus, setListingStatus] = useState<ListingStatus & { checking?: boolean }>({ available: null });
   const listingRequest = useRef(0);
@@ -621,6 +623,10 @@ export default function App() {
   // Nothing is drawn until we know whether someone is logged in, so the welcome page doesn't flash by.
   if (!session) return <div className="app-shell" />;
 
+  // Phones: the main action stays in the top bar, the other links sit behind "Menu".
+  // On wider screens the menu's links show inline, exactly as before.
+  const closeMenu = () => setMenuOpen(false);
+
   return (
     <div className="app-shell">
       {screen !== "welcome" && (
@@ -630,26 +636,32 @@ export default function App() {
             <span>Flatty</span>
           </button>
           {screen === "about" && <span className="header-pref">How Flatty works</span>}
-          <nav className="topbar-actions" aria-label="Flatty">
+          <nav className={menuOpen ? "topbar-actions open" : "topbar-actions"} aria-label="Flatty" onKeyDown={(event) => event.key === "Escape" && closeMenu()}>
             {(screen === "browse" || screen === "result") && (
-              <>
-                <button className="topbar-link" onClick={openAbout} type="button">How it works</button>
-                <button aria-haspopup="dialog" className="edit-button" onClick={() => setShowPreferences(true)} type="button">
-                  Edit profile
-                </button>
-              </>
+              <button aria-haspopup="dialog" className="edit-button" onClick={() => { closeMenu(); setShowPreferences(true); }} type="button">
+                Edit profile
+              </button>
             )}
             {screen === "about" && (
-              <button className="edit-button" onClick={leaveAbout} type="button">
+              <button className="edit-button" onClick={() => { closeMenu(); leaveAbout(); }} type="button">
                 {onboarded ? "Back to your search" : "Start a search"}
               </button>
             )}
-            {screen !== "about" && (account
-              ? <button className="topbar-link" onClick={signOut} type="button">Log out</button>
-              : <button className="topbar-link" onClick={() => setAuthBox({ mode: "login" })} type="button">Log in</button>)}
-            {/* Online test: forget the developer password on this device. */}
-            {session.siteGate && <a className="topbar-link" href="/__gate/logout">Lock site</a>}
+            <button aria-controls="topbar-menu" aria-expanded={menuOpen} aria-label={menuOpen ? "Close menu" : "Menu"} className="menu-toggle" onClick={() => setMenuOpen((open) => !open)} type="button">
+              {menuOpen ? <Icon name="close" size={20} /> : <span className="menu-lines" aria-hidden="true"><i /><i /><i /></span>}
+            </button>
+            <div className="topbar-menu" id="topbar-menu" onClick={closeMenu}>
+              {(screen === "browse" || screen === "result") && (
+                <button className="topbar-link menu-about" onClick={openAbout} type="button">How it works</button>
+              )}
+              {screen !== "about" && (account
+                ? <button className="topbar-link" onClick={signOut} type="button">Log out</button>
+                : <button className="topbar-link" onClick={() => setAuthBox({ mode: "login" })} type="button">Log in</button>)}
+              {/* Online test: forget the developer password on this device. */}
+              {session.siteGate && <a className="topbar-link" href="/__gate/logout">Lock site</a>}
+            </div>
           </nav>
+          {menuOpen && <button aria-label="Close menu" className="menu-backdrop" onClick={closeMenu} tabIndex={-1} type="button" />}
         </header>
       )}
 
