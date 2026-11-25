@@ -294,7 +294,8 @@ def check_link(request: CheckRequest):
     [result], version = assess([listing], market, context=stored + [listing])
     listing.update(risk_score=result["score"], risk_details=result, model_version=version)
     # One listing: worth a few seconds to read who the landlord is looking for. None if Ollama is off.
-    listing["wishes"] = wishes.extract(listing) if llm.available() else None
+    with llm.for_a_person():
+        listing["wishes"] = wishes.extract(listing) if llm.available() else None
     return {"listing": card(listing, profile, market, QualityModel(), enforce_budget=False)}
 
 
@@ -306,13 +307,15 @@ def generate(request: GenerateRequest):
             stored = db.get_listing(conn, listing_id)
         if stored and not stored.get("active", True):
             raise HTTPException(status_code=410, detail={"code": "listing_inactive", "message": "This listing is no longer online, so Flatty won't draft an application for it."})
-    return llm.generate(request.kind, request.listing, request.profile.model_dump(), request.language)
+    with llm.for_a_person():
+        return llm.generate(request.kind, request.listing, request.profile.model_dump(), request.language)
 
 
 @app.post("/api/translate-title", dependencies=GUARDED)
 def translate_title(request: TranslateTitleRequest):
     original = request.title
-    translated = llm.translate_title(original)
+    with llm.for_a_person():
+        translated = llm.translate_title(original)
     return {
         "title": translated,
         "originalTitle": original,

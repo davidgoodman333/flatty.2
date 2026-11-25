@@ -5,6 +5,8 @@ running, a template is used instead so the app keeps working.
 """
 
 import re
+import threading
+from contextlib import contextmanager
 
 try:
     import httpx
@@ -16,6 +18,38 @@ from .geo import school_name
 from .translations import is_already_english, translate_property_title
 
 _TRANSLATION_CACHE: dict[str, str] = {}
+
+# --- People first --------------------------------------------------------------------
+# Ollama works on several requests at once (OLLAMA_NUM_PARALLEL, set by start-online.sh). The
+# background jobs (app/llm_worker.py) wait while anyone is waiting for an e-mail, a summary, a
+# translation or a pasted listing, so those get the graphics chip's full speed.
+_people_waiting = 0
+_people_lock = threading.Lock()
+_nobody_waiting = threading.Event()
+_nobody_waiting.set()
+
+
+@contextmanager
+def for_a_person():
+    """Wrap AI work that someone is waiting for."""
+    global _people_waiting
+    with _people_lock:
+        _people_waiting += 1
+        _nobody_waiting.clear()
+    try:
+        yield
+    finally:
+        with _people_lock:
+            _people_waiting -= 1
+            if not _people_waiting:
+                _nobody_waiting.set()
+
+
+def wait_for_people(stop: threading.Event) -> None:
+    """Block a background job until nobody is waiting for the AI (or the worker is stopped)."""
+    while not _nobody_waiting.wait(timeout=1):
+        if stop.is_set():
+            return
 
 
 def is_english_title(title: str) -> bool:

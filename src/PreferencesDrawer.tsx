@@ -75,6 +75,7 @@ export default function PreferencesDrawer({ initial, onApply, onClose, onRestart
             </div>
             <input
               className="range-input" id="drawer-budget" max={BUDGET_MAX} min={BUDGET_MIN} step="50" type="range"
+              style={{ "--fill": `${((draft.budget - BUDGET_MIN) / (BUDGET_MAX - BUDGET_MIN)) * 100}%` } as React.CSSProperties}
               value={draft.budget} onChange={(event) => update({ budget: Number(event.target.value) })}
             />
           </section>

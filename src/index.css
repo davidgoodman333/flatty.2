@@ -127,7 +127,9 @@ h1, h2, p { margin: 0; }
 .chip.active { border-color: #e55242; background: #fff0ed; box-shadow: 3px 3px 0 #e55242; }
 .label-row { display: flex; justify-content: space-between; align-items: center; }
 .label-row strong { font-family: "Space Mono", monospace; font-size: 19px; }
-.range-input { width: 100%; height: 5px; appearance: none; background: #eadbd8; accent-color: #e55242; }
+/* The part left of the thumb is filled: --fill is the thumb's position in % (set inline). */
+.range-input { width: 100%; height: 5px; appearance: none; background: linear-gradient(to right, #e55242 0 var(--fill, 0%), #eadbd8 var(--fill, 0%) 100%); accent-color: #e55242; }
+.range-input::-moz-range-track { background: transparent; }
 .range-input::-webkit-slider-thumb { width: 20px; height: 20px; appearance: none; border: 4px solid #fff9f3; border-radius: 0; background: #ffc857; box-shadow: 0 0 0 2px #e55242; }
 .range-labels { display: flex; justify-content: space-between; margin-top: 10px; color: #8f7d80; font-size: 13px; }
 .text-input { display: flex; align-items: center; gap: 10px; height: 50px; padding: 0 14px; border: 1px solid #ccd3cb; background: rgba(255,255,255,.5); color: #71827d; }
@@ -164,6 +166,8 @@ h1, h2, p { margin: 0; }
 .type-card strong, .type-card small { display: block; }.type-card strong { font-size: 14px; }.type-card small { margin-top: 3px; color: #8b777a; font-size: 12px; }
 .type-card.active .pixel-check { border-color: #ffc857; background: #ffc857; color: #4c2730; }
 .onboarding-actions { display: flex; align-items: center; justify-content: space-between; padding-top: 24px; border-top: 1px solid #d8ddd5; }
+.onboarding-actions .primary-button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: 4px 4px 0 #ffc857; }
+.step-missing { margin-top: 12px; color: #8a6500; font-size: 13px; text-align: right; }
 .setup-privacy { margin-top: 17px; color: #9a898b; font-size: 11px; line-height: 1.5; text-align: center; }
 .setup-privacy span { margin-right: 7px; color: #b36c67; font-family: "Space Mono"; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
 .primary-button, .link-input button {

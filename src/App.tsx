@@ -8,7 +8,7 @@ import {
 import AuthBox, { type AuthMode } from "./AuthBox";
 import HowItWorks from "./HowItWorks";
 import Icon from "./Icon";
-import { APARTMENT_TYPES, AREAS, BUDGET_MAX, BUDGET_MIN, CAMPUSES, CAMPUS_GROUPS, COUNTRIES, DEFAULT_CAMPUS, findCampus, MAIN_LANGUAGES, OTHER_LANGUAGES, PRIORITIES } from "./options";
+import { APARTMENT_TYPES, AREAS, BUDGET_MAX, BUDGET_MIN, CAMPUSES, CAMPUS_GROUPS, COUNTRIES, findCampus, MAIN_LANGUAGES, OTHER_LANGUAGES, PRIORITIES } from "./options";
 import MapRadius from "./MapRadius";
 import PreferencesDrawer from "./PreferencesDrawer";
 
@@ -92,19 +92,21 @@ export default function App() {
   const [aboutReturn, setAboutReturn] = useState<Screen>("welcome");
   const [step, setStep] = useState(1);
   const [fullName, setFullName] = useState("");
-  const [languages, setLanguages] = useState(["English"]);
+  // The setup starts with nothing selected: the student chooses every answer.
+  const [languages, setLanguages] = useState<string[]>([]);
   const [budget, setBudget] = useState(1800);
-  const [areas, setAreas] = useState(["Länggasse"]);
+  const [budgetChosen, setBudgetChosen] = useState(false); // a slider always has a value: count it once it was moved
+  const [areas, setAreas] = useState<string[]>([]);
   const [showMap, setShowMap] = useState(false);
-  const [destination, setDestination] = useState(DEFAULT_CAMPUS.name);
-  const [priorities, setPriorities] = useState(["Public transport", "Grocery stores"]);
-  const [country, setCountry] = useState("Switzerland");
+  const [destination, setDestination] = useState("");
+  const [priorities, setPriorities] = useState<string[]>([]);
+  const [country, setCountry] = useState("");
   const [hasGuarantor, setHasGuarantor] = useState<"yes" | "no" | "">("");
   const [hasViewingPerson, setHasViewingPerson] = useState<"yes" | "no" | "">("");
   const [hasSwissNumber, setHasSwissNumber] = useState<"yes" | "no" | "">("");
   const [hasSwissBank, setHasSwissBank] = useState<"yes" | "no" | "">("");
   const [hasResidencePermit, setHasResidencePermit] = useState<"yes" | "no" | "">("");
-  const [apartmentTypes, setApartmentTypes] = useState(["Studio"]);
+  const [apartmentTypes, setApartmentTypes] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<"search" | "link" | "saved">("search");
   const [link, setLink] = useState("");
   const [pastedText, setPastedText] = useState("");
@@ -145,6 +147,20 @@ export default function App() {
   const generateRequest = useRef(0);
 
   const progress = `${step * (100 / 6)}%`;
+  // What still has to be answered before "Continue" works. Every step is mandatory except
+  // step 3 ("What matters nearby?").
+  const missingInStep = (current: number): string[] => {
+    const unanswered = (items: [string, string][]) => items.filter(([value]) => !value).map(([, label]) => label);
+    switch (current) {
+      case 1: return unanswered([[languages.length ? "yes" : "", "a language you speak"], [budgetChosen ? "yes" : "", "your maximum rent (move the slider)"]]);
+      case 2: return unanswered([[destination, "where you study"], [areas.length || filters.areaLat !== null ? "yes" : "", "a preferred area (or choose one on the map)"]]);
+      case 4: return unanswered([[fullName.trim(), "your name"], [country, "where you are from"], [hasGuarantor, "the guarantor question"], [hasViewingPerson, "the viewings question"]]);
+      case 5: return unanswered([[hasSwissNumber, "Swiss phone number"], [hasSwissBank, "Swiss bank account"], [hasResidencePermit, "residence permit"]]);
+      case 6: return apartmentTypes.length ? [] : ["an apartment type"];
+      default: return [];
+    }
+  };
+  const stepMissing = missingInStep(step);
   const campus = findCampus(destination);
   const profile: Profile = {
     name: fullName.trim(), languages, budget, areas, destination, priorities, country, hasGuarantor, hasViewingPerson,
@@ -156,6 +172,7 @@ export default function App() {
     setFullName(next.name);
     setLanguages(next.languages);
     setBudget(next.budget);
+    setBudgetChosen(true);
     setAreas(next.areas);
     setDestination(next.destination);
     setPriorities(next.priorities);
@@ -709,8 +726,8 @@ export default function App() {
                 </select>
               </div>
               <div className="question">
-                <div className="label-row"><label>Maximum monthly rent</label><strong>CHF {budget.toLocaleString("de-CH")}</strong></div>
-                <input className="range-input" min={BUDGET_MIN} max={BUDGET_MAX} step="50" type="range" value={budget} onChange={(event) => setBudget(Number(event.target.value))} />
+                <div className="label-row"><label>Maximum monthly rent</label><strong>{budgetChosen ? `CHF ${budget.toLocaleString("de-CH")}` : "Move the slider"}</strong></div>
+                <input className="range-input" min={BUDGET_MIN} max={BUDGET_MAX} step="50" style={{ "--fill": `${pricePercent(budget)}%` } as React.CSSProperties} type="range" value={budget} onChange={(event) => { setBudget(Number(event.target.value)); setBudgetChosen(true); }} />
                 <div className="range-labels"><span>CHF 400</span><span>CHF 3,500</span></div>
               </div>
             </section>
@@ -722,7 +739,8 @@ export default function App() {
               <p>Tell us where you study and where you would like to live.</p>
               <div className="question">
                 <label htmlFor="destination">Where do you study?</label>
-                <select className="option-select campus-select" id="destination" onChange={(event) => setDestination(event.target.value)} value={campus.name}>
+                <select className="option-select campus-select" id="destination" onChange={(event) => setDestination(event.target.value)} value={destination}>
+                  <option disabled value="">Choose where you study…</option>
                   {CAMPUS_GROUPS.map((group) => (
                     <optgroup key={group} label={group}>
                       {CAMPUSES.filter((item) => item.group === group).map((item) => <option key={item.name}>{item.name}</option>)}
@@ -790,6 +808,7 @@ export default function App() {
               <div className="question">
                 <label htmlFor="country">Where are you from?</label>
                 <select className="option-select country-select" id="country" value={country} onChange={(event) => setCountry(event.target.value)}>
+                  <option disabled value="">Choose your country…</option>
                   {COUNTRIES.map((item) => <option key={item}>{item}</option>)}
                 </select>
               </div>
@@ -867,10 +886,15 @@ export default function App() {
 
           <div className="onboarding-actions">
             {step > 1 ? <button className="back-button" onClick={() => setStep(step - 1)} type="button"><Icon name="back" size={17} /> Back</button> : <span />}
-            <button className="primary-button" onClick={() => step < 6 ? setStep(step + 1) : finishOnboarding()} type="button">
+            <button
+              aria-describedby={stepMissing.length ? "step-missing" : undefined}
+              className="primary-button" disabled={stepMissing.length > 0}
+              onClick={() => step < 6 ? setStep(step + 1) : finishOnboarding()} type="button"
+            >
               {step < 6 ? "Continue" : "Show apartments"} <Icon name="arrow" size={17} />
             </button>
           </div>
+          {stepMissing.length > 0 && <p className="step-missing" id="step-missing">Still needed: {stepMissing.join(", ")}.</p>}
           <p className="setup-privacy">
             <span>PRIVATE BY DEFAULT</span>
             We only use your data to adapt application details and offer better findings.

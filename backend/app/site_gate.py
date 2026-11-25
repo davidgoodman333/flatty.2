@@ -23,6 +23,7 @@ import hmac
 import html
 import os
 import time
+from pathlib import Path
 from urllib.parse import parse_qs
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -31,7 +32,9 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 
 from .config import BACKEND_DIR, SECURE_COOKIES
 
-PASSWORD_FILE = BACKEND_DIR / "site_password.txt"  # git-ignored: stays on this laptop
+# git-ignored: stays on this laptop. The online copy (start-online.sh) points here with
+# FLATTY_SITE_PASSWORD_FILE, so both copies share one password file.
+PASSWORD_FILE = Path(os.getenv("FLATTY_SITE_PASSWORD_FILE", BACKEND_DIR / "site_password.txt"))
 PASSWORD = os.getenv("FLATTY_SITE_PASSWORD") or (
     PASSWORD_FILE.read_text(encoding="utf-8").strip() if PASSWORD_FILE.exists() else "")
 ENABLED = bool(PASSWORD)

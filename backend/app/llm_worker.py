@@ -10,7 +10,8 @@ So this worker goes through the listings one at a time and stores the results:
 2. English titles. Lists show the glossary translation until the worker reaches a listing
    (matching.card).
 
-One request at a time leaves Ollama free for e-mails and summaries in between.
+One request at a time, and none while someone is waiting for an e-mail, a summary or a
+translation (llm.for_a_person), so the team's requests get the full speed.
 FLATTY_LLM_WORKER=0 turns it off (FLATTY_TRANSLATE_TITLES=0, the old name, still works).
 """
 
@@ -54,6 +55,7 @@ def _wishes_batch() -> int:
     """Read the wishes of up to BATCH listings. Returns how many were done (0: nothing to do or no LLM)."""
     done = 0
     for listing in _pending_wishes():
+        llm.wait_for_people(_stop)  # someone is waiting for an e-mail or a summary: let them go first
         if _stop.is_set():
             break
         found = wishes.extract(listing)
@@ -68,6 +70,7 @@ def _wishes_batch() -> int:
 def _titles_batch() -> int:
     done = 0
     for listing_id, title in _pending_titles():
+        llm.wait_for_people(_stop)
         if _stop.is_set():
             break
         translated = llm.best_title(title)

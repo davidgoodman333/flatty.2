@@ -101,6 +101,7 @@ export default function MapRadius({ area, radiusKm, onAreaChange, listings, onSe
       </div>
       <input
         className="range-input" disabled={!area} id="radius" max={RADIUS_MAX} min={RADIUS_MIN} step="0.5" type="range" value={radiusKm}
+        style={{ "--fill": `${((radiusKm - RADIUS_MIN) / (RADIUS_MAX - RADIUS_MIN)) * 100}%` } as React.CSSProperties}
         onChange={(event) => onAreaChange(area, Number(event.target.value))}
       />
       <small className="filter-hint">

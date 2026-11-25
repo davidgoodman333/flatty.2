@@ -86,8 +86,8 @@ The site is reachable only while steps 3 and 4 are running. Before hosting on a 
 The team's chosen set-up: the link is a Vercel address, and Vercel forwards **every** request (pages, API, files) to one team member's Mac, which runs the whole back-end and Ollama. Everyone who opens the link, from any laptop, uses that Mac's database and AI. The developer password (`backend/site_password.txt`, see above) protects every route, because every route is served by the Mac. Vercel only provides the address and serves nothing itself.
 
 ```
-browser ──https──> flatty.vercel.app ──(rewrite: everything)──> your-mac.tailXXXX.ts.net ──Tailscale Funnel──> 127.0.0.1:8000
-                                                                                                  (Flatty: pages, API, SQLite, Ollama)
+browser ──https──> flatty.vercel.app ──(rewrite: everything)──> your-mac.tailXXXX.ts.net ──Tailscale Funnel──> 127.0.0.1:8100
+                                                                             (~/flatty-online: code from GitHub main; data from this folder)
 ```
 
 The tunnel is **Tailscale Funnel**: free, a fixed address, and no warning page in front of the site. (Free ngrok shows its own warning page to browsers, which would replace Flatty when Vercel forwards to it.)
@@ -95,12 +95,16 @@ The tunnel is **Tailscale Funnel**: free, a fixed address, and no warning page i
 **Once, on the Mac that hosts:**
 
 1. Install Tailscale (https://tailscale.com/download/mac), sign in, and in the admin console (https://login.tailscale.com/admin) turn on *MagicDNS*, *HTTPS certificates* and *Funnel* for this machine (Access controls → `nodeAttrs` with `funnel`; the console offers it the first time you run `tailscale funnel`).
-2. Run `tailscale funnel --bg 8000` once and note the address it prints (`https://<mac-name>.<tailnet>.ts.net`). Turn it off again with `tailscale funnel --https=443 off`.
+2. Run `tailscale funnel --bg 8100` once and note the address it prints (`https://<mac-name>.<tailnet>.ts.net`). Turn it off again with `tailscale funnel --https=443 off`.
 3. Put that address into [`vercel/vercel.json`](../vercel/vercel.json) instead of `YOUR-MAC.YOUR-TAILNET.ts.net`.
 4. Make sure `backend/site_password.txt` holds the team password (one line). Cookies of requests that came through Vercel or the tunnel are marked https-only automatically (`FLATTY_SECURE_COOKIES=1` forces it for every request).
 5. Deploy the Vercel project from the `vercel/` folder only: either `npx vercel --cwd vercel --prod` (asks you to log in the first time), or import the GitHub repository at vercel.com with **Root Directory** set to `vercel` and no build command. The folder holds nothing but `vercel.json`, so Vercel has no files of its own and forwards everything.
 
-**Each time you want the site online:** run `./start-online.sh` in the project root. It checks the password is set, builds the front-end, opens the Funnel, and starts Flatty with `caffeinate` so the Mac stays awake. Ctrl+C stops it and closes the Funnel. While it isn't running, the Vercel link shows an error page.
+**Each time you want the site online:** run `./start-online.sh` in the project root (in a Terminal window that stays open). Ctrl+C stops it and closes the Funnel; while it isn't running, the Vercel link shows an error page.
+
+**The online site runs the code from GitHub, not this folder.** `start-online.sh` keeps a separate copy in `~/flatty-online` (cloned the first time, with its own `.venv` and `node_modules`) and runs it on port 8100. Every 3 minutes it checks `main` on GitHub; when anyone on the team has pushed, it pulls, installs dependencies if `requirements.txt` or the lockfile changed, builds the front-end into `dist.new`, and restarts. If the new version doesn't build or doesn't answer within a minute, the previous version keeps running and that commit is skipped. So: **push to `main` to put a change online**; half-finished edits in your working folder never go online. The log is `~/flatty-online.log`.
+
+The data stays on the Mac and is shared by both copies: the online copy reads the database and models of this folder (`FLATTY_DATA_DIR`, `FLATTY_MODEL_DIR`) and its password file (`FLATTY_SITE_PASSWORD_FILE`). Only the online copy should run the daily scraper and the background AI jobs; start the development back-end with `FLATTY_AUTO_REFRESH=0 FLATTY_LLM_WORKER=0` while the online site runs, so nothing is done twice. The script also sets Ollama to 4 parallel requests and keeps the Mac awake.
 
 Things to know:
 - The Funnel address also works on its own, without Vercel; it is just as protected by the password.
@@ -203,7 +207,7 @@ The type filter and the notes on each listing both use these rules. Market price
 
 **E-mails, summaries and title translations** come from `qwen3:8b` through Ollama on `127.0.0.1:11434`. To use another model, set `FLATTY_OLLAMA_MODEL`. If Ollama is offline or unavailable, deterministic templates and an extensive Swiss rental glossary serve as transparent local fallbacks.
 
-Ollama has to be running (`ollama serve`, or open the Ollama app); `/api/health` shows `llm.available`. Without it, e-mails and summaries come from templates and titles from the glossary.
+Ollama has to be running (`ollama serve`, or open the Ollama app); `/api/health` shows `llm.available`. For the team testing at the same time, Ollama runs 4 requests in parallel and keeps the model loaded (`OLLAMA_NUM_PARALLEL=4`, `OLLAMA_KEEP_ALIVE=24h`; `start-online.sh` sets both and restarts the Ollama app if needed). The background jobs wait while anyone is waiting for an e-mail, a summary, a translation or a pasted listing (`llm.for_a_person`). Measured on an M5 with 16 GB: an e-mail, a summary and three title translations requested at the same moment by three people all finished within 8 s, each close to its time alone. Without it, e-mails and summaries come from templates and titles from the glossary.
 
 - **E-mails** are written in English and in German, in the first person, from the profile facts only, and always end with the fixed closing and the student's name (`llm.sign`).
 - **Landlord wishes** (`app/wishes.py`): many listings say who they want: "Schweizerdeutsch als Muttersprache", "Mitbewohnerin gesucht (18-28)", "ideal für Berufstätige", "Nichtraucher vorausgesetzt". Keyword rules can't tell these from sentences about the current flatmates ("Ich spreche Italienisch, Schweizerdeutsch verstehe ich teilweise"), so the LLM reads them, following `[ai.wishes]` in [rules.toml](rules.toml), with guards: only sentences that mention one of the topics are sent (a listing without one costs no LLM call); each wish must point to its sentence, and that sentence must be about the topic (a language must be named, an age range written out); and the model confirms each wish once more with a yes/no question about that sentence alone. Language and occupation wishes change the reply likelihood and appear in `reasons` with the listing's own words. Gender, age and smoking aren't in the profile, so they are shown (`wishes` on each listing, `fit: unknown`) but not scored. Results are stored per listing (`wishes`, `wishes_version`) and read again when the text changes or `version` in `[ai.wishes]` is bumped. Pasted listings are read straight away. `/api/health` shows `wishesPending`.
